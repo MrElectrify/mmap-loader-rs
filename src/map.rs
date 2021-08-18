@@ -7,8 +7,8 @@ use crate::{
         System::{
             Diagnostics::Debug::*,
             Memory::{
-                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
-                PAGE_EXECUTE_READWRITE, SEC_IMAGE,
+                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FILE_MAP_EXECUTE,
+                FILE_MAP_READ, PAGE_EXECUTE_READ, SEC_IMAGE,
             },
         },
     },
@@ -34,7 +34,7 @@ impl MappedFile {
             // first open the file
             let file = CreateFileA(
                 path,
-                SYNCHRONIZE | FILE_EXECUTE,
+                SYNCHRONIZE | FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
                 FILE_SHARE_NONE,
                 null_mut(),
                 OPEN_EXISTING,
@@ -50,7 +50,7 @@ impl MappedFile {
             let mapping = CreateFileMappingA(
                 file.handle,
                 null_mut(),
-                PAGE_EXECUTE_READWRITE | SEC_IMAGE,
+                PAGE_EXECUTE_READ | SEC_IMAGE,
                 0,
                 0,
                 PSTR(null_mut()),
@@ -61,7 +61,7 @@ impl MappedFile {
             // track the mapping
             let mapping = Handle::from(mapping);
             // actually map the file
-            let contents = MapViewOfFile(mapping.handle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+            let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ | FILE_MAP_EXECUTE, 0, 0, 0);
             if contents.is_null() {
                 return Err(GetLastError().into());
             }
@@ -107,5 +107,10 @@ mod test {
     #[test]
     fn good_file() {
         let file = MappedFile::create("test.exe").unwrap();
+        assert_eq!(file.contents as usize, 0x140000000);
+        unsafe {
+            // check the MZ header
+            assert_eq!(std::str::from_utf8_unchecked(std::slice::from_raw_parts(file.contents as *const u8, 2)), "MZ");
+        }
     }
 }

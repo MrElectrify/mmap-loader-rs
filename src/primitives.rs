@@ -6,8 +6,9 @@ use crate::bindings::Windows::Win32::{
 };
 
 // A Win32 error with its associated string
+#[derive(Debug)]
 pub struct Error {
-    pub code: u32,
+    pub code: WIN32_ERROR,
 }
 
 impl Error {
@@ -16,12 +17,12 @@ impl Error {
         let mut buf = [0; 256];
         unsafe {
             let size = FormatMessageA(
-                FORMAT_MESSAGE_FROM_SYSTEM,
+                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                 null(),
-                self.code as u32,
+                self.code.0 as u32,
                 0,
                 PSTR(buf.as_mut_ptr()),
-                0,
+                buf.len() as u32,
                 null_mut(),
             );
             let str: String = String::from_utf8_lossy(&buf[..size as usize])
@@ -32,19 +33,20 @@ impl Error {
     }
 }
 
-impl From<u32> for Error {
-    fn from(code: u32) -> Self {
+impl From<WIN32_ERROR> for Error {
+    fn from(code: WIN32_ERROR) -> Self {
         Self { code }
     }
 }
 
-impl From<WIN32_ERROR> for Error {
-    fn from(val: WIN32_ERROR) -> Self {
-        Self::from(val.0)
+impl From<u32> for Error {
+    fn from(code: u32) -> Self {
+        Self::from(WIN32_ERROR(code))
     }
 }
 
 /// A raw HANDLE that is closed when dropped
+#[derive(Debug)]
 pub struct Handle {
     pub handle: HANDLE,
 }
@@ -63,5 +65,27 @@ impl Drop for Handle {
         unsafe {
             CloseHandle(self.handle);
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn empty_error() {
+        let e = Error::from(ERROR_SUCCESS);
+        assert_eq!(e.code, ERROR_SUCCESS);
+        assert_eq!(
+            e.str().unwrap(),
+            "The operation completed successfully.\r\n"
+        );
+    }
+
+    #[test]
+    fn generic_error() {
+        let e = Error::from(ERROR_ACCESS_DENIED);
+        assert_eq!(e.code, ERROR_ACCESS_DENIED);
+        assert_eq!(e.str().unwrap(), "Access is denied.\r\n");
     }
 }

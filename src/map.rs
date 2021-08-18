@@ -5,10 +5,10 @@ use crate::{
         Foundation::{HANDLE, PSTR},
         Storage::FileSystem::*,
         System::{
-            Diagnostics::Debug::GetLastError,
+            Diagnostics::Debug::*,
             Memory::{
-                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FILE_MAP_READ, PAGE_READONLY,
-                SEC_IMAGE,
+                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
+                PAGE_EXECUTE_READWRITE, SEC_IMAGE,
             },
         },
     },
@@ -16,6 +16,7 @@ use crate::{
 };
 
 // A mapped executable image file in the process's address space
+#[derive(Debug)]
 pub struct MappedFile {
     file: Handle,
     mapping: Handle,
@@ -49,18 +50,18 @@ impl MappedFile {
             let mapping = CreateFileMappingA(
                 file.handle,
                 null_mut(),
-                PAGE_READONLY | SEC_IMAGE,
+                PAGE_EXECUTE_READWRITE | SEC_IMAGE,
                 0,
                 0,
                 PSTR(null_mut()),
             );
-            if mapping.is_invalid() {
+            if mapping.is_null() {
                 return Err(GetLastError().into());
             }
             // track the mapping
             let mapping = Handle::from(mapping);
             // actually map the file
-            let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ, 0, 0, 0);
+            let contents = MapViewOfFile(mapping.handle, FILE_MAP_ALL_ACCESS, 0, 0, 0);
             if contents.is_null() {
                 return Err(GetLastError().into());
             }
@@ -80,5 +81,31 @@ impl Drop for MappedFile {
             UnmapViewOfFile(self.contents);
         }
         // the handles will be dropped by the compiler
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    #[should_panic]
+    fn bad_file() {
+        let _ = MappedFile::create("badpath").unwrap();
+    }
+
+    #[test]
+    fn bad_file_err() {
+        let err = MappedFile::create("badpath").unwrap_err();
+        assert_eq!(err.code, ERROR_FILE_NOT_FOUND);
+        assert_eq!(
+            err.str().unwrap(),
+            "The system cannot find the file specified.\r\n"
+        );
+    }
+
+    #[test]
+    fn good_file() {
+        let file = MappedFile::create("test.exe").unwrap();
     }
 }

@@ -33,6 +33,19 @@ impl Error {
     }
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ({})",
+            self.code.0,
+            self.str().unwrap_or_else(|| "Unknown".to_string())
+        )
+    }
+}
+
+impl std::error::Error for Error {}
+
 impl From<WIN32_ERROR> for Error {
     fn from(code: WIN32_ERROR) -> Self {
         Self { code }

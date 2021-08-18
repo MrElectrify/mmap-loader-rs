@@ -9,7 +9,9 @@ fn main() {
                     CreateFileMappingA,
                     MapViewOfFile,
                     UnmapViewOfFile,
+                    VirtualQuery,
                     FILE_MAP,
+                    MEMORY_BASIC_INFORMATION,
                     PAGE_PROTECTION_FLAGS
                 },
                 SystemServices::IMAGE_DOS_HEADER,

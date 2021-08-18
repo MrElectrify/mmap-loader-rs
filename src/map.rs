@@ -1,4 +1,4 @@
-use std::{ffi::c_void, ptr::null_mut};
+use anyhow::Result;
 
 use crate::{
     bindings::Windows::Win32::{
@@ -7,13 +7,15 @@ use crate::{
         System::{
             Diagnostics::Debug::*,
             Memory::{
-                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FILE_MAP_EXECUTE,
-                FILE_MAP_READ, PAGE_EXECUTE_READ, SEC_IMAGE,
+                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, VirtualQuery, FILE_MAP_EXECUTE,
+                FILE_MAP_READ, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, SEC_IMAGE,
             },
         },
     },
     primitives::{Error, Handle},
 };
+
+use std::{ffi::c_void, ptr::null_mut};
 
 // A mapped executable image file in the process's address space
 #[derive(Debug)]
@@ -29,17 +31,24 @@ impl MappedFile {
         (self.contents as *const u8).offset(offset) as *const T
     }
 
-    /// Gets the mutable data at an RVA offset
-    pub unsafe fn get_rva_mut<T>(&mut self, offset: isize) -> *mut T {
-        (self.contents as *mut u8).offset(offset) as *mut T
+    /// Returns the size of the mapped file
+    pub fn len(&self) -> Result<usize> {
+        let mut mbi = MEMORY_BASIC_INFORMATION::default();
+        unsafe {
+            let size = VirtualQuery(self.contents, &mut mbi, 3);
+            if size == 0 {
+                return Err(Error::from(GetLastError()).into());
+            }
+        }
+        Ok(mbi.RegionSize)
     }
-    
+
     /// Creates a mapped executable file
     ///
     /// # Arguments
     ///
     /// `path`: The path to the executable image file
-    pub fn load(path: &str) -> Result<Self, Error> {
+    pub fn load(path: &str) -> Result<Self> {
         unsafe {
             // first open the file
             let file = CreateFileA(
@@ -52,7 +61,7 @@ impl MappedFile {
                 HANDLE::default(),
             );
             if file.is_invalid() {
-                return Err(GetLastError().into());
+                return Err(Error::from(GetLastError()).into());
             }
             // track the file
             let file = Handle::from(file);
@@ -66,14 +75,14 @@ impl MappedFile {
                 PSTR(null_mut()),
             );
             if mapping.is_null() {
-                return Err(GetLastError().into());
+                return Err(Error::from(GetLastError()).into());
             }
             // track the mapping
             let mapping = Handle::from(mapping);
             // actually map the file
             let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ | FILE_MAP_EXECUTE, 0, 0, 0);
             if contents.is_null() {
-                return Err(GetLastError().into());
+                return Err(Error::from(GetLastError()).into());
             }
             Ok(Self {
                 file,
@@ -106,7 +115,10 @@ mod test {
 
     #[test]
     fn bad_file_err() {
-        let err = MappedFile::load("badpath").unwrap_err();
+        let err = MappedFile::load("badpath")
+            .unwrap_err()
+            .downcast::<Error>()
+            .unwrap();
         assert_eq!(err.code, ERROR_FILE_NOT_FOUND);
         assert_eq!(
             err.str().unwrap(),
@@ -120,7 +132,13 @@ mod test {
         assert_eq!(file.contents as usize, 0x140000000);
         unsafe {
             // check the MZ header
-            assert_eq!(std::str::from_utf8_unchecked(std::slice::from_raw_parts(file.contents as *const u8, 2)), "MZ");
+            assert_eq!(
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    file.contents as *const u8,
+                    2
+                )),
+                "MZ"
+            );
         }
     }
 }

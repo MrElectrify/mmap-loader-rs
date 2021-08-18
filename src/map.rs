@@ -26,6 +26,11 @@ pub struct MappedFile {
 }
 
 impl MappedFile {
+    /// Returns the contents of the mapped file
+    pub fn contents(&self) -> *const c_void {
+        self.contents
+    }
+
     /// Gets the data at an RVA offset
     pub unsafe fn get_rva<T>(&self, offset: isize) -> *const T {
         (self.contents as *const u8).offset(offset) as *const T

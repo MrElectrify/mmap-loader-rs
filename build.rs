@@ -14,7 +14,10 @@ fn main() {
                     MEMORY_BASIC_INFORMATION,
                     PAGE_PROTECTION_FLAGS
                 },
-                SystemServices::IMAGE_DOS_HEADER,
+                SystemServices::{
+                    DLL_PROCESS_ATTACH,
+                    IMAGE_DOS_HEADER,
+                },
             },
         }
     }

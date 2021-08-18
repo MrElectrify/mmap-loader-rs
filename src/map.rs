@@ -1,52 +1,84 @@
-use std::{convert::TryFrom, ptr::null_mut};
+use std::{ffi::c_void, ptr::null_mut};
 
-use crate::bindings::Windows::Win32::{Foundation, System::Threading::GetCurrentProcess};
-
-use ntapi::{
-    ntmmapi::{NtCreateSection, NtMapViewOfSection, NtUnmapViewOfSection},
-    winapi::{
-        shared::ntdef,
-        shared::ntdef::NTSTATUS,
-        um::winnt::{PAGE_EXECUTE, PVOID, SECTION_ALL_ACCESS, SEC_IMAGE},
+use crate::{
+    bindings::Windows::Win32::{
+        Foundation::{HANDLE, PSTR},
+        Storage::FileSystem::*,
+        System::{
+            Diagnostics::Debug::GetLastError,
+            Memory::{
+                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, FILE_MAP_READ, PAGE_READONLY,
+                SEC_IMAGE,
+            },
+        },
     },
+    primitives::{Error, Handle},
 };
 
-struct MappedFile {
-    image_base: PVOID,
+// A mapped executable image file in the process's address space
+pub struct MappedFile {
+    file: Handle,
+    mapping: Handle,
+    pub contents: *mut c_void,
 }
 
-impl TryFrom<Foundation::HANDLE> for MappedFile {
-    type Error = NTSTATUS;
-
-    fn try_from(file_handle: Foundation::HANDLE) -> Result<Self, Self::Error> {
-        // try to create a section
-        let mut section_handle: ntdef::HANDLE = null_mut();
+impl MappedFile {
+    /// Creates a mapped executable file
+    ///
+    /// # Arguments
+    ///
+    /// `path`: The path to the executable image file
+    pub fn create(path: &str) -> Result<Self, Error> {
         unsafe {
-            match NtCreateSection(
-                &mut section_handle,
-                SECTION_ALL_ACCESS,
+            // first open the file
+            let file = CreateFileA(
+                path,
+                SYNCHRONIZE | FILE_EXECUTE,
+                FILE_SHARE_NONE,
                 null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES::default(),
+                HANDLE::default(),
+            );
+            if file.is_invalid() {
+                return Err(GetLastError().into());
+            }
+            // track the file
+            let file = Handle::from(file);
+            // create a file mapping
+            let mapping = CreateFileMappingA(
+                file.handle,
                 null_mut(),
-                PAGE_EXECUTE,
-                SEC_IMAGE,
-                file_handle.0 as ntdef::HANDLE,
-            ) {
-                0 => {},
-                err => return Err(err)
-            };
+                PAGE_READONLY | SEC_IMAGE,
+                0,
+                0,
+                PSTR(null_mut()),
+            );
+            if mapping.is_invalid() {
+                return Err(GetLastError().into());
+            }
+            // track the mapping
+            let mapping = Handle::from(mapping);
+            // actually map the file
+            let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ, 0, 0, 0);
+            if contents.is_null() {
+                return Err(GetLastError().into());
+            }
+            Ok(Self {
+                file,
+                mapping,
+                contents,
+            })
         }
-        // track the raw handle
-        let mut section_handle = crate::primitives::RawHandle::from(section_handle);
-        Ok(Self {
-            image_base: null_mut(),
-        })
     }
 }
 
 impl Drop for MappedFile {
     fn drop(&mut self) {
+        // we need to unmap the file before the handle is freed
         unsafe {
-            NtUnmapViewOfSection(GetCurrentProcess().0 as ntdef::HANDLE, self.image_base);
+            UnmapViewOfFile(self.contents);
         }
+        // the handles will be dropped by the compiler
     }
 }

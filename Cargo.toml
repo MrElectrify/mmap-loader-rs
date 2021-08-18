@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-ntapi = "0.3.6"
 windows = "0.18.0"
 
 [build-dependencies]

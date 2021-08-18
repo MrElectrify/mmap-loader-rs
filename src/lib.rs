@@ -1,4 +1,5 @@
 mod map;
+pub mod pe;
 mod primitives;
 
 mod bindings {

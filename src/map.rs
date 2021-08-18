@@ -20,16 +20,26 @@ use crate::{
 pub struct MappedFile {
     file: Handle,
     mapping: Handle,
-    pub contents: *mut c_void,
+    contents: *mut c_void,
 }
 
 impl MappedFile {
+    /// Gets the data at an RVA offset
+    pub unsafe fn get_rva<T>(&self, offset: isize) -> *const T {
+        (self.contents as *const u8).offset(offset) as *const T
+    }
+
+    /// Gets the mutable data at an RVA offset
+    pub unsafe fn get_rva_mut<T>(&mut self, offset: isize) -> *mut T {
+        (self.contents as *mut u8).offset(offset) as *mut T
+    }
+    
     /// Creates a mapped executable file
     ///
     /// # Arguments
     ///
     /// `path`: The path to the executable image file
-    pub fn create(path: &str) -> Result<Self, Error> {
+    pub fn load(path: &str) -> Result<Self, Error> {
         unsafe {
             // first open the file
             let file = CreateFileA(
@@ -91,12 +101,12 @@ mod test {
     #[test]
     #[should_panic]
     fn bad_file() {
-        let _ = MappedFile::create("badpath").unwrap();
+        let _ = MappedFile::load("badpath").unwrap();
     }
 
     #[test]
     fn bad_file_err() {
-        let err = MappedFile::create("badpath").unwrap_err();
+        let err = MappedFile::load("badpath").unwrap_err();
         assert_eq!(err.code, ERROR_FILE_NOT_FOUND);
         assert_eq!(
             err.str().unwrap(),
@@ -106,7 +116,7 @@ mod test {
 
     #[test]
     fn good_file() {
-        let file = MappedFile::create("test.exe").unwrap();
+        let file = MappedFile::load("test.exe").unwrap();
         assert_eq!(file.contents as usize, 0x140000000);
         unsafe {
             // check the MZ header

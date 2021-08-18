@@ -12,6 +12,7 @@ fn main() {
                     FILE_MAP,
                     PAGE_PROTECTION_FLAGS
                 },
+                SystemServices::IMAGE_DOS_HEADER,
             },
         }
     }

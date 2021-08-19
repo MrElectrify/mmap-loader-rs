@@ -1,21 +1,15 @@
 use anyhow::Result;
 
-use crate::{
-    bindings::Windows::Win32::{
-        Foundation::{HANDLE, PSTR},
-        Storage::FileSystem::*,
-        System::{
-            Diagnostics::Debug::*,
-            Memory::{
-                CreateFileMappingA, MapViewOfFile, UnmapViewOfFile, VirtualQuery, FILE_MAP_EXECUTE,
-                FILE_MAP_READ, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, SEC_IMAGE,
-            },
-        },
-    },
-    primitives::{Error, Handle},
-};
+use crate::primitives::Handle;
 
-use std::{ffi::c_void, ptr::null_mut};
+use std::{ffi::{OsStr, c_void}, io::Error, ptr::{null, null_mut}};
+
+use winapi::um::{
+    fileapi::*,
+    memoryapi::*,
+    winbase::*,
+    winnt::*
+};
 
 // A mapped executable image file in the process's address space
 #[derive(Debug)]
@@ -32,17 +26,30 @@ impl MappedFile {
     }
 
     /// Gets the data at an RVA offset
+    ///
+    /// # Arguments
+    /// 
+    /// `offset`: The RVA offset to the data
     pub unsafe fn get_rva<T>(&self, offset: isize) -> *const T {
         (self.contents as *const u8).offset(offset) as *const T
+    }
+
+    /// Gets the function at an RVA offset
+    /// 
+    /// # Arguments
+    /// 
+    /// `offset`: The RVA offset to the function
+    pub unsafe fn get_rva_fn<T>(&self, offset: isize) -> &T {
+        std::mem::transmute((self.contents as *const u8).offset(offset))
     }
 
     /// Returns the size of the mapped file
     pub fn len(&self) -> Result<usize> {
         let mut mbi = MEMORY_BASIC_INFORMATION::default();
         unsafe {
-            let size = VirtualQuery(self.contents, &mut mbi, 3);
+            let size = VirtualQuery(self.contents, &mut mbi, std::mem::size_of_val(&mbi));
             if size == 0 {
-                return Err(Error::from(GetLastError()).into());
+                return Err(Error::last_os_error().into());
             }
         }
         Ok(mbi.RegionSize)
@@ -53,20 +60,20 @@ impl MappedFile {
     /// # Arguments
     ///
     /// `path`: The path to the executable image file
-    pub fn load(path: &str) -> Result<Self> {
+    pub fn load(path: &OsStr) -> Result<Self> {
         unsafe {
             // first open the file
             let file = CreateFileA(
-                path,
-                SYNCHRONIZE | FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-                FILE_SHARE_NONE,
+                path.collect() as *const i8,
+                SYNCHRONIZE | GENERIC_READ | GENERIC_EXECUTE,
+                FILE_SHARE_READ,
                 null_mut(),
                 OPEN_EXISTING,
-                FILE_FLAGS_AND_ATTRIBUTES::default(),
-                HANDLE::default(),
+                0,
+                null_mut()
             );
-            if file.is_invalid() {
-                return Err(Error::from(GetLastError()).into());
+            if file.is_null() {
+                return Err(Error::last_os_error().into());
             }
             // track the file
             let file = Handle::from(file);
@@ -77,17 +84,17 @@ impl MappedFile {
                 PAGE_EXECUTE_READ | SEC_IMAGE,
                 0,
                 0,
-                PSTR(null_mut()),
+                null(),
             );
             if mapping.is_null() {
-                return Err(Error::from(GetLastError()).into());
+                return Err(Error::last_os_error().into());
             }
             // track the mapping
             let mapping = Handle::from(mapping);
             // actually map the file
             let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ | FILE_MAP_EXECUTE, 0, 0, 0);
             if contents.is_null() {
-                return Err(Error::from(GetLastError()).into());
+                return Err(Error::last_os_error().into());
             }
             Ok(Self {
                 file,
@@ -115,25 +122,21 @@ mod test {
     #[test]
     #[should_panic]
     fn bad_file() {
-        let _ = MappedFile::load("badpath").unwrap();
+        let _ = MappedFile::load(&"badpath".to_owned()).unwrap();
     }
 
     #[test]
     fn bad_file_err() {
-        let err = MappedFile::load("badpath")
+        let err = MappedFile::load(&"badpath".to_owned())
             .unwrap_err()
             .downcast::<Error>()
             .unwrap();
-        assert_eq!(err.code, ERROR_FILE_NOT_FOUND);
-        assert_eq!(
-            err.str().unwrap(),
-            "The system cannot find the file specified.\r\n"
-        );
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     #[test]
     fn good_file() {
-        let file = MappedFile::load("test.exe").unwrap();
+        let file = MappedFile::load(&"test.exe".to_owned()).unwrap();
         assert_eq!(file.contents as usize, 0x140000000);
         unsafe {
             // check the MZ header

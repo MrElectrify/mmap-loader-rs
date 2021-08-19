@@ -1,9 +1,4 @@
-use std::ptr::{null, null_mut};
-
-use winapi::um::{
-    handleapi::CloseHandle,
-    winnt::HANDLE,
-};
+use winapi::um::{handleapi::CloseHandle, winnt::HANDLE};
 
 /// A raw HANDLE that is closed when dropped
 #[derive(Debug)]

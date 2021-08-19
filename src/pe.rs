@@ -1,15 +1,10 @@
 use anyhow::Result;
 
-use crate::{
-    error::Error,
-    map::MappedFile
-};
+use crate::{error::Error, map::MappedFile};
 
 use std::{ffi::c_void, ptr::null};
 
-use winapi::um::{
-    winnt::*
-};
+use winapi::um::winnt::*;
 
 pub struct PortableExecutable {
     file: MappedFile,
@@ -24,11 +19,12 @@ impl PortableExecutable {
     /// # Arguments
     ///
     /// `path`: The path to the executable file
-    pub fn load(path: &String) -> Result<PortableExecutable> {
+    pub fn load(path: &str) -> Result<PortableExecutable> {
         // first map the file
         let mut file = MappedFile::load(path)?;
         // load the headers
-        let (dos_header, nt_headers, section_headers) = PortableExecutable::load_headers(&mut file)?;
+        let (dos_header, nt_headers, section_headers) =
+            PortableExecutable::load_headers(&mut file)?;
         Ok(PortableExecutable {
             file,
             dos_header,
@@ -72,20 +68,19 @@ impl PortableExecutable {
     }
 
     /// Runs the executable's entry point with `DLL_PROCESS_ATTACH`
+    ///
+    /// # Safety
+    ///
+    /// The safety of this function is entirely dependent on whether or not
+    /// the underlying executable is safe
     pub unsafe fn run(self) -> Result<isize> {
         // resolve the entry point
         let entry_point_offset = self.nt_headers.OptionalHeader.AddressOfEntryPoint as usize;
         if entry_point_offset > self.file.len()? {
-            return Err(
-                Error::from("Entry point offset was bigger than the allocation").into(),
-            );
+            return Err(Error::from("Entry point offset was bigger than the allocation").into());
         }
-        let entry_point =
-            self
-                .file
-                .get_rva_fn::<unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize>(
-                    entry_point_offset as isize,
-                );
+        let entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize =
+            std::mem::transmute(self.file.get_rva::<*const u8>(entry_point_offset as isize));
         Ok(entry_point(
             self.file.contents(),
             DLL_PROCESS_ATTACH,

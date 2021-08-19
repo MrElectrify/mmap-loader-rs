@@ -1,15 +1,14 @@
 use anyhow::Result;
 
-use crate::primitives::Handle;
+use crate::{primitives::Handle, util::to_wide};
 
-use std::{ffi::{OsStr, c_void}, io::Error, ptr::{null, null_mut}};
-
-use winapi::um::{
-    fileapi::*,
-    memoryapi::*,
-    winbase::*,
-    winnt::*
+use std::{
+    ffi::c_void,
+    io::Error,
+    ptr::{null, null_mut},
 };
+
+use winapi::um::{fileapi::*, memoryapi::*, winbase::*, winnt::*};
 
 // A mapped executable image file in the process's address space
 #[derive(Debug)]
@@ -28,18 +27,18 @@ impl MappedFile {
     /// Gets the data at an RVA offset
     ///
     /// # Arguments
-    /// 
+    ///
     /// `offset`: The RVA offset to the data
     pub unsafe fn get_rva<T>(&self, offset: isize) -> *const T {
         (self.contents as *const u8).offset(offset) as *const T
     }
 
     /// Gets the function at an RVA offset
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// `offset`: The RVA offset to the function
-    pub unsafe fn get_rva_fn<T>(&self, offset: isize) -> &T {
+    pub unsafe fn get_rva_fn<Args, Ret, T: Fn(Args) -> Ret>(&self, offset: isize) -> T {
         std::mem::transmute((self.contents as *const u8).offset(offset))
     }
 
@@ -60,17 +59,17 @@ impl MappedFile {
     /// # Arguments
     ///
     /// `path`: The path to the executable image file
-    pub fn load(path: &OsStr) -> Result<Self> {
+    pub fn load(path: &str) -> Result<Self> {
         unsafe {
             // first open the file
-            let file = CreateFileA(
-                path.collect() as *const i8,
+            let file = CreateFileW(
+                to_wide(path).as_ptr(),
                 SYNCHRONIZE | GENERIC_READ | GENERIC_EXECUTE,
                 FILE_SHARE_READ,
                 null_mut(),
                 OPEN_EXISTING,
                 0,
-                null_mut()
+                null_mut(),
             );
             if file.is_null() {
                 return Err(Error::last_os_error().into());

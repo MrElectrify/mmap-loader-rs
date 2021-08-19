@@ -103,4 +103,19 @@ mod test {
             assert_eq!(image.run().unwrap(), 23);
         }
     }
+
+    // we only support x86-64/ARM64 for now
+    #[test]
+    #[should_panic]
+    fn x86_image() {
+        let _ = PortableExecutable::load("x86.exe").unwrap();
+    }
+
+    #[test]
+    fn crt_image() {
+        let image = PortableExecutable::load("crt.exe").unwrap();
+        unsafe {
+            assert_eq!(image.run().unwrap(), 23);
+        }
+    }
 }

@@ -6,3 +6,6 @@ edition = "2018"
 [dependencies]
 anyhow = "1"
 winapi = { version = "0.3", features = ["impl-default", "fileapi", "handleapi", "memoryapi", "std", "winbase"] }
+
+[dev-dependencies]
+serial_test = "0.5"

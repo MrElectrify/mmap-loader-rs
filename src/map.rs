@@ -33,15 +33,6 @@ impl MappedFile {
         (self.contents as *const u8).offset(offset) as *const T
     }
 
-    /// Gets the function at an RVA offset
-    ///
-    /// # Arguments
-    ///
-    /// `offset`: The RVA offset to the function
-    pub unsafe fn get_rva_fn<Args, Ret, T: Fn(Args) -> Ret>(&self, offset: isize) -> T {
-        std::mem::transmute((self.contents as *const u8).offset(offset))
-    }
-
     /// Returns the size of the mapped file
     pub fn len(&self) -> Result<usize> {
         let mut mbi = MEMORY_BASIC_INFORMATION::default();
@@ -62,7 +53,7 @@ impl MappedFile {
     pub fn load(path: &str) -> Result<Self> {
         unsafe {
             // first open the file
-            let file = CreateFileW(
+            let file: Handle = CreateFileW(
                 to_wide(path).as_ptr(),
                 SYNCHRONIZE | GENERIC_READ | GENERIC_EXECUTE,
                 FILE_SHARE_READ,
@@ -70,26 +61,24 @@ impl MappedFile {
                 OPEN_EXISTING,
                 0,
                 null_mut(),
-            );
-            if file.is_null() {
+            ).into();
+            if file.is_invalid() {
                 return Err(Error::last_os_error().into());
             }
             // track the file
             let file = Handle::from(file);
             // create a file mapping
-            let mapping = CreateFileMappingA(
+            let mapping: Handle = CreateFileMappingA(
                 file.handle,
                 null_mut(),
                 PAGE_EXECUTE_READ | SEC_IMAGE,
                 0,
                 0,
                 null(),
-            );
-            if mapping.is_null() {
+            ).into();
+            if mapping.is_invalid() {
                 return Err(Error::last_os_error().into());
             }
-            // track the mapping
-            let mapping = Handle::from(mapping);
             // actually map the file
             let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ | FILE_MAP_EXECUTE, 0, 0, 0);
             if contents.is_null() {
@@ -117,25 +106,27 @@ impl Drop for MappedFile {
 #[cfg(test)]
 mod test {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     #[should_panic]
     fn bad_file() {
-        let _ = MappedFile::load(&"badpath".to_owned()).unwrap();
+        let _ = MappedFile::load("badpath").unwrap();
     }
 
     #[test]
     fn bad_file_err() {
-        let err = MappedFile::load(&"badpath".to_owned())
+        let err = MappedFile::load("badpath")
             .unwrap_err()
             .downcast::<Error>()
             .unwrap();
-        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
+    #[serial]
     #[test]
-    fn good_file() {
-        let file = MappedFile::load(&"test.exe".to_owned()).unwrap();
+    fn basic_file() {
+        let file = MappedFile::load("basic.exe").unwrap();
         assert_eq!(file.contents as usize, 0x140000000);
         unsafe {
             // check the MZ header

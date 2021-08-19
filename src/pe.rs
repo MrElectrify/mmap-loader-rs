@@ -79,6 +79,7 @@ impl PortableExecutable {
         if entry_point_offset > self.file.len()? {
             return Err(Error::from("Entry point offset was bigger than the allocation").into());
         }
+        // we transmute here because I have no earthly idea how to return a generic function
         let entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize =
             std::mem::transmute(self.file.get_rva::<*const u8>(entry_point_offset as isize));
         Ok(entry_point(
@@ -92,10 +93,12 @@ impl PortableExecutable {
 #[cfg(test)]
 mod test {
     use super::*;
+    use serial_test::serial;
 
+    #[serial]
     #[test]
     fn good_image() {
-        let image = PortableExecutable::load(&"test.exe".to_owned()).unwrap();
+        let image = PortableExecutable::load("basic.exe").unwrap();
         unsafe {
             assert_eq!(image.run().unwrap(), 23);
         }

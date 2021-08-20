@@ -32,9 +32,11 @@ impl MappedFile {
     pub fn get_rva<T>(&self, offset: isize) -> Option<*const T> {
         unsafe {
             let res = (self.contents as *const u8).offset(offset) as *const T;
-            // query the memory location
+            // query the memory location and ensure it is valid
             let mut mbi = MEMORY_BASIC_INFORMATION::default();
-            if VirtualQuery(res as *const c_void, &mut mbi, std::mem::size_of_val(&mbi)) == 0 {
+            if VirtualQuery(res as *const c_void, &mut mbi, std::mem::size_of_val(&mbi)) == 0
+                || mbi.State == MEM_FREE
+            {
                 return None;
             }
             Some(res)
@@ -121,10 +123,10 @@ mod test {
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
-    #[serial]
     #[test]
+    #[serial]
     fn basic_file() {
-        let file = MappedFile::load("basic.exe").unwrap();
+        let file = MappedFile::load("test/basic.exe").unwrap();
         assert_eq!(file.contents as usize, 0x140000000);
         unsafe {
             // check the MZ header

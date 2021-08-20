@@ -46,14 +46,12 @@ impl PortableExecutable {
         Vec<IMAGE_SECTION_HEADER>,
     )> {
         unsafe {
-            let dos_header = *file.get_rva::<IMAGE_DOS_HEADER>(0);
-            let nt_offset = dos_header.e_lfanew;
-            if nt_offset as usize > file.len()? {
-                return Err(
-                    Error::from("NT offset was bigger than the header's allocation").into(),
-                );
-            }
-            let nt_headers = *file.get_rva::<IMAGE_NT_HEADERS64>(dos_header.e_lfanew as isize);
+            let dos_header = *file
+                .get_rva::<IMAGE_DOS_HEADER>(0)
+                .ok_or(Error::from("DOS header was out of bounds"))?;
+            let nt_headers = *file
+                .get_rva::<IMAGE_NT_HEADERS64>(dos_header.e_lfanew as isize)
+                .ok_or(Error::from("NT headers were out of bounds"))?;
             // ensure supported architecture
             if nt_headers.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64
                 || nt_headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
@@ -75,13 +73,15 @@ impl PortableExecutable {
     /// the underlying executable is safe
     pub unsafe fn run(self) -> Result<isize> {
         // resolve the entry point
-        let entry_point_offset = self.nt_headers.OptionalHeader.AddressOfEntryPoint as usize;
-        if entry_point_offset > self.file.len()? {
-            return Err(Error::from("Entry point offset was bigger than the allocation").into());
-        }
         // we transmute here because I have no earthly idea how to return a generic function
         let entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize =
-            std::mem::transmute(self.file.get_rva::<*const u8>(entry_point_offset as isize));
+            std::mem::transmute(
+                self.file
+                    .get_rva::<*const u8>(
+                        self.nt_headers.OptionalHeader.AddressOfEntryPoint as isize,
+                    )
+                    .ok_or(Error::from("Entry point was out of bounds"))?,
+            );
         Ok(entry_point(
             self.file.contents(),
             DLL_PROCESS_ATTACH,

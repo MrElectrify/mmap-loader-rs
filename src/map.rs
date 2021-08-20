@@ -29,20 +29,16 @@ impl MappedFile {
     /// # Arguments
     ///
     /// `offset`: The RVA offset to the data
-    pub unsafe fn get_rva<T>(&self, offset: isize) -> *const T {
-        (self.contents as *const u8).offset(offset) as *const T
-    }
-
-    /// Returns the size of the mapped file
-    pub fn len(&self) -> Result<usize> {
-        let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    pub fn get_rva<T>(&self, offset: isize) -> Option<*const T> {
         unsafe {
-            let size = VirtualQuery(self.contents, &mut mbi, std::mem::size_of_val(&mbi));
-            if size == 0 {
-                return Err(Error::last_os_error().into());
+            let res = (self.contents as *const u8).offset(offset) as *const T;
+            // query the memory location
+            let mut mbi = MEMORY_BASIC_INFORMATION::default();
+            if VirtualQuery(res as *const c_void, &mut mbi, std::mem::size_of_val(&mbi)) == 0 {
+                return None;
             }
+            Some(res)
         }
-        Ok(mbi.RegionSize)
     }
 
     /// Creates a mapped executable file
@@ -61,7 +57,8 @@ impl MappedFile {
                 OPEN_EXISTING,
                 0,
                 null_mut(),
-            ).into();
+            )
+            .into();
             if file.is_invalid() {
                 return Err(Error::last_os_error().into());
             }
@@ -75,7 +72,8 @@ impl MappedFile {
                 0,
                 0,
                 null(),
-            ).into();
+            )
+            .into();
             if mapping.is_invalid() {
                 return Err(Error::last_os_error().into());
             }

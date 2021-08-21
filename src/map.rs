@@ -24,23 +24,35 @@ impl MappedFile {
         self.contents
     }
 
-    /// Gets the data at an RVA offset
+    /// Gets the data at an RVA offset, checking to make sure
     ///
     /// # Arguments
     ///
     /// `offset`: The RVA offset to the data
-    pub fn get_rva<T>(&self, offset: isize) -> Option<*const T> {
+    /// `required_size`: The required size of the allocation
+    pub fn get_rva_size_chk<T>(&self, offset: isize, required_size: usize) -> Option<*const T> {
         unsafe {
             let res = (self.contents as *const u8).offset(offset) as *const T;
             // query the memory location and ensure it is valid
             let mut mbi = MEMORY_BASIC_INFORMATION::default();
             if VirtualQuery(res as *const c_void, &mut mbi, std::mem::size_of_val(&mbi)) == 0
                 || mbi.State == MEM_FREE
+                || res as usize + required_size > mbi.BaseAddress as usize + mbi.RegionSize
             {
                 return None;
             }
             Some(res)
         }
+    }
+
+    /// Gets the data at an RVA offset. Performs necessary checks to ensure
+    /// that the entire type fits within the allocation
+    ///
+    /// # Arguments
+    ///
+    /// `offset`: The RVA offset to the data
+    pub fn get_rva<T>(&self, offset: isize) -> Option<*const T> {
+        self.get_rva_size_chk(offset, std::mem::size_of::<T>())
     }
 
     /// Creates a mapped executable file
@@ -64,8 +76,6 @@ impl MappedFile {
             if file.is_invalid() {
                 return Err(Error::last_os_error().into());
             }
-            // track the file
-            let file = Handle::from(file);
             // create a file mapping
             let mapping: Handle = CreateFileMappingA(
                 file.handle,

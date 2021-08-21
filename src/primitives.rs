@@ -1,5 +1,3 @@
-use std::ptr::null_mut;
-
 use winapi::um::{handleapi::CloseHandle, winnt::HANDLE};
 
 /// A raw HANDLE that is closed when dropped
@@ -15,7 +13,7 @@ impl Handle {
     }
     /// Returns whether or not the handle is null
     pub fn is_null(&self) -> bool {
-        self.handle == null_mut()
+        self.handle.is_null()
     }
 }
 

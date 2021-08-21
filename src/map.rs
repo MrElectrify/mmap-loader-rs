@@ -45,6 +45,31 @@ impl MappedFile {
         }
     }
 
+    /// Gets the mutable data at an RVA offset, checking to make sure
+    ///
+    /// # Arguments
+    ///
+    /// `offset`: The RVA offset to the data
+    /// `required_size`: The required size of the allocation
+    pub fn get_rva_size_chk_mut<T>(
+        &mut self,
+        offset: isize,
+        required_size: usize,
+    ) -> Option<*mut T> {
+        unsafe {
+            let res = (self.contents as *mut u8).offset(offset) as *mut T;
+            // query the memory location and ensure it is valid
+            let mut mbi = MEMORY_BASIC_INFORMATION::default();
+            if VirtualQuery(res as *const c_void, &mut mbi, std::mem::size_of_val(&mbi)) == 0
+                || mbi.State == MEM_FREE
+                || res as usize + required_size > mbi.BaseAddress as usize + mbi.RegionSize
+            {
+                return None;
+            }
+            Some(res)
+        }
+    }
+
     /// Gets the data at an RVA offset. Performs necessary checks to ensure
     /// that the entire type fits within the allocation
     ///
@@ -53,6 +78,16 @@ impl MappedFile {
     /// `offset`: The RVA offset to the data
     pub fn get_rva<T>(&self, offset: isize) -> Option<*const T> {
         self.get_rva_size_chk(offset, std::mem::size_of::<T>())
+    }
+
+    /// Gets the mutable data at an RVA offset. Performs necessary checks to ensure
+    /// that the entire type fits within the allocation
+    ///
+    /// # Arguments
+    ///
+    /// `offset`: The RVA offset to the data
+    pub fn get_rva_mut<T>(&mut self, offset: isize) -> Option<*mut T> {
+        self.get_rva_size_chk_mut(offset, std::mem::size_of::<T>())
     }
 
     /// Creates a mapped executable file

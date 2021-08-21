@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Err {
     DOSOutOfBounds,
     NTOutOfBounds,
@@ -9,6 +9,7 @@ pub enum Err {
     LibNameOutOfBounds,
     IATOutOfBounds,
     ProcNameOutOfBounds,
+    NullProcName,
 }
 
 #[derive(Debug)]
@@ -27,7 +28,8 @@ impl Error {
             Err::IDOutOfBounds => "The import descriptor was out of bounds",
             Err::LibNameOutOfBounds => "The IAT library name was out of bounds",
             Err::IATOutOfBounds => "The IAT thunk was out of bounds",
-            Err::ProcNameOutOfBounds => "The procedure name was out of bounds"
+            Err::ProcNameOutOfBounds => "The procedure name was out of bounds",
+            Err::NullProcName => "The procedure name was null",
         }
     }
 }

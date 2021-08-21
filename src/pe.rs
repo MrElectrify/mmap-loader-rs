@@ -3,13 +3,20 @@ use anyhow::Result;
 use crate::{
     error::{Err, Error},
     map::MappedFile,
+    primitives::protected_write,
 };
 
 use log::debug;
 
-use std::{ffi::c_void, ptr::null};
+use std::{
+    ffi::{c_void, CStr},
+    ptr::null,
+};
 
-use winapi::{shared::winerror::ERROR_MOD_NOT_FOUND, um::{libloaderapi::LoadLibraryA, winnt::*}};
+use winapi::um::{
+    libloaderapi::{GetProcAddress, LoadLibraryA},
+    winnt::*,
+};
 
 pub struct PortableExecutable<'a> {
     file: MappedFile,
@@ -31,7 +38,7 @@ impl<'a> PortableExecutable<'a> {
         let (nt_headers, section_headers) = PortableExecutable::load_headers(&mut file)?;
         // load the entry point
         let entry_point = PortableExecutable::load_entry_point(&mut file, nt_headers)?;
-        let pe = PortableExecutable {
+        let mut pe = PortableExecutable {
             file,
             nt_headers,
             _section_headers: section_headers,
@@ -40,6 +47,27 @@ impl<'a> PortableExecutable<'a> {
         pe.resolve_imports()?;
         // process relocations
         Ok(pe)
+    }
+
+    /// Loads the entry point from a mapped file
+    ///
+    /// # Arguments
+    ///
+    /// `file`: The mapped executable file
+    fn load_entry_point(
+        file: &mut MappedFile,
+        nt_headers: &IMAGE_NT_HEADERS64,
+    ) -> Result<unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize> {
+        unsafe {
+            // resolve the entry point
+            // we transmute here because I have no earthly idea how to return a generic function
+            let entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize =
+                std::mem::transmute(
+                    file.get_rva::<u8>(nt_headers.OptionalHeader.AddressOfEntryPoint as isize)
+                        .ok_or(Error(Err::EPOutOfBounds))?,
+                );
+            Ok(entry_point)
+        }
     }
 
     /// Loads the headers from a mapped file
@@ -78,29 +106,8 @@ impl<'a> PortableExecutable<'a> {
         }
     }
 
-    /// Loads the entry point from a mapped file
-    ///
-    /// # Arguments
-    ///
-    /// `file`: The mapped executable file
-    fn load_entry_point(
-        file: &mut MappedFile,
-        nt_headers: &IMAGE_NT_HEADERS64,
-    ) -> Result<unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize> {
-        unsafe {
-            // resolve the entry point
-            // we transmute here because I have no earthly idea how to return a generic function
-            let entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize =
-                std::mem::transmute(
-                    file.get_rva::<u8>(nt_headers.OptionalHeader.AddressOfEntryPoint as isize)
-                        .ok_or(Error(Err::EPOutOfBounds))?,
-                );
-            Ok(entry_point)
-        }
-    }
-
     /// Resolves imports from the NT headers
-    fn resolve_imports(&self) -> Result<()> {
+    fn resolve_imports(&mut self) -> Result<()> {
         unsafe {
             let iat_directory = &self.nt_headers.OptionalHeader.DataDirectory
                 [IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
@@ -128,11 +135,13 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `table`: The import descriptors
-    pub fn resolve_import_descriptors(&self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> Result<()> {
+    pub fn resolve_import_descriptors(&mut self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> Result<()> {
         // we know the table is not null
         for &entry in table {
             // ignore empty entries
-            if entry.Name == 0 { continue }
+            if entry.Name == 0 {
+                continue;
+            }
             // load the name of the import. here we could crash if the string was on the edge
             // of the page. but that's a waste to check for every byte
             let name = self
@@ -140,19 +149,54 @@ impl<'a> PortableExecutable<'a> {
                 .get_rva::<i8>(entry.Name as isize)
                 .ok_or(Error(Err::LibNameOutOfBounds))?;
             unsafe {
-                debug!("Loading library {:?}", std::ffi::CStr::from_ptr(name));
-            }
-            unsafe {
+                debug!("Loading library {:?}", CStr::from_ptr(name));
                 let library = LoadLibraryA(name);
                 if library.is_null() {
-                    return Err(std::io::Error::from_raw_os_error(ERROR_MOD_NOT_FOUND as i32).into())
+                    return Err(std::io::Error::last_os_error().into());
                 }
                 // skip empty tables
-                /*if entry.FirstThunk == 0 { continue }
-                let mut thunk = &*self.file.get_rva::<IMAGE_THUNK_DATA>(entry.FirstThunk as isize).ok_or(Error(Err::IATOutOfBounds))?;
-                while thunk.u1.AddressOfData() != &0 {
-                    let proc_name = if (thunk.u1.Ordinal() & IMAGE_ORDINAL_FLAG) != 0 { thunk.u1.Ordinal() } else { self.file.get_rva::<i8>(thunk.u1.AddressOfData()).ok_or(Error(Err::ProcNameOutOfBounds))? };
-                }*/
+                if entry.FirstThunk == 0 {
+                    continue;
+                }
+                let mut thunk = self
+                    .file
+                    .get_rva_mut::<IMAGE_THUNK_DATA>(entry.FirstThunk as isize)
+                    .ok_or(Error(Err::IATOutOfBounds))?;
+                while (*thunk).u1.AddressOfData() != &0 {
+                    let proc_name = if ((*thunk).u1.Ordinal() & IMAGE_ORDINAL_FLAG) != 0 {
+                        (*(*thunk).u1.Ordinal() & !IMAGE_ORDINAL_FLAG) as *const i8
+                    } else {
+                        &(*self
+                            .file
+                            .get_rva::<IMAGE_IMPORT_BY_NAME>(*(*thunk).u1.AddressOfData() as isize)
+                            .ok_or(Error(Err::ProcNameOutOfBounds))?)
+                        .Name as *const i8
+                    };
+                    if ((*thunk).u1.Ordinal() & IMAGE_ORDINAL_FLAG) != 0 {
+                        debug!(
+                            "Loading procedure with ordinal {}",
+                            (*thunk).u1.Ordinal() & !IMAGE_ORDINAL_FLAG
+                        );
+                    } else {
+                        // if it is a pointer, make sure it is not null
+                        if proc_name.is_null() {
+                            return Err(Error(Err::NullProcName).into());
+                        }
+                        debug!(
+                            "Loading procedure with name {:?}",
+                            CStr::from_ptr(proc_name)
+                        );
+                    }
+                    // load the function
+                    let func = GetProcAddress(library, proc_name);
+                    if func.is_null() {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                    let mut func_ptr = (*thunk).u1.Function_mut() as *mut ULONGLONG;
+                    // write the function address
+                    protected_write(&mut func_ptr, func as *mut ULONGLONG)?;
+                    thunk = thunk.add(1);
+                }
             }
         }
         Ok(())
@@ -177,32 +221,58 @@ impl<'a> PortableExecutable<'a> {
 mod test {
     use super::*;
     use serial_test::serial;
+    use winapi::shared::winerror::{
+        ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND,
+    };
 
     #[test]
-    #[should_panic]
     fn bad_dos() {
-        let _ = PortableExecutable::load("test/baddos.exe").unwrap();
+        let err: std::io::Error = PortableExecutable::load("test/baddos.exe")
+            .err()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert_eq!(err.raw_os_error().unwrap(), ERROR_BAD_EXE_FORMAT as i32);
     }
 
     #[test]
-    #[should_panic]
     fn bad_section() {
-        let _ = PortableExecutable::load("test/badsection.exe").unwrap();
+        let err: std::io::Error = PortableExecutable::load("test/badsection.exe")
+            .err()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert_eq!(err.raw_os_error().unwrap(), ERROR_BAD_EXE_FORMAT as i32);
     }
 
     #[test]
-    #[should_panic]
     fn bad_entry() {
-        let image = PortableExecutable::load("test/badentry.exe").unwrap();
-        unsafe {
-            image.run().unwrap();
-        }
+        let err: Error = PortableExecutable::load("test/badentry.exe")
+            .err()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert_eq!(err.0, Err::EPOutOfBounds);
     }
 
     #[test]
-    #[should_panic]
     fn bad_mod() {
-        let _ = PortableExecutable::load("test/badmod.exe").unwrap();
+        let err: std::io::Error = PortableExecutable::load("test/badmod.exe")
+            .err()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert_eq!(err.raw_os_error().unwrap(), ERROR_MOD_NOT_FOUND as i32);
+    }
+
+    #[test]
+    fn bad_proc() {
+        let err: std::io::Error = PortableExecutable::load("test/badproc.exe")
+            .err()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert_eq!(err.raw_os_error().unwrap(), ERROR_PROC_NOT_FOUND as i32);
     }
 
     #[test]

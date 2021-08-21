@@ -5,8 +5,10 @@ pub enum Err {
     UnsupportedArchitecture,
     SectOutOfBounds,
     EPOutOfBounds,
-    IATOutOfBounds,
+    IDOutOfBounds,
     LibNameOutOfBounds,
+    IATOutOfBounds,
+    ProcNameOutOfBounds,
 }
 
 #[derive(Debug)]
@@ -22,15 +24,17 @@ impl Error {
             }
             Err::SectOutOfBounds => "A section header was out of bounds",
             Err::EPOutOfBounds => "The entry point was out of bounds",
-            Err::IATOutOfBounds => "The IAT was out of bounds",
+            Err::IDOutOfBounds => "The import descriptor was out of bounds",
             Err::LibNameOutOfBounds => "The IAT library name was out of bounds",
+            Err::IATOutOfBounds => "The IAT thunk was out of bounds",
+            Err::ProcNameOutOfBounds => "The procedure name was out of bounds"
         }
     }
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({:?})", self.err_str(), self.0)
+        write!(f, "{:?}", self.0)
     }
 }
 

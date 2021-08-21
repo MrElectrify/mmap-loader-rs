@@ -9,7 +9,7 @@ use log::debug;
 
 use std::{ffi::c_void, ptr::null};
 
-use winapi::um::winnt::*;
+use winapi::{shared::winerror::ERROR_MOD_NOT_FOUND, um::{libloaderapi::LoadLibraryA, winnt::*}};
 
 pub struct PortableExecutable<'a> {
     file: MappedFile,
@@ -115,26 +115,24 @@ impl<'a> PortableExecutable<'a> {
                     iat_directory.VirtualAddress as isize,
                     iat_directory.Size as usize,
                 )
-                .ok_or(Error(Err::IATOutOfBounds))?;
-            self.resolve_import_table(std::slice::from_raw_parts(
+                .ok_or(Error(Err::IDOutOfBounds))?;
+            self.resolve_import_descriptors(std::slice::from_raw_parts(
                 iat_entry,
                 (iat_directory.Size as usize) / std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>(),
             ))
         }
     }
 
-    /// Resolves imports from a specified import address table
+    /// Resolves imports from the specified import descriptors
     ///
     /// # Arguments
     ///
-    /// `table`: The import descriptor table
-    pub fn resolve_import_table(&self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> Result<()> {
+    /// `table`: The import descriptors
+    pub fn resolve_import_descriptors(&self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> Result<()> {
         // we know the table is not null
         for &entry in table {
             // ignore empty entries
-            if entry.Name == 0 {
-                continue;
-            }
+            if entry.Name == 0 { continue }
             // load the name of the import. here we could crash if the string was on the edge
             // of the page. but that's a waste to check for every byte
             let name = self
@@ -142,7 +140,19 @@ impl<'a> PortableExecutable<'a> {
                 .get_rva::<i8>(entry.Name as isize)
                 .ok_or(Error(Err::LibNameOutOfBounds))?;
             unsafe {
-                debug!("Loading {:?}", std::ffi::CStr::from_ptr(name));
+                debug!("Loading library {:?}", std::ffi::CStr::from_ptr(name));
+            }
+            unsafe {
+                let library = LoadLibraryA(name);
+                if library.is_null() {
+                    return Err(std::io::Error::from_raw_os_error(ERROR_MOD_NOT_FOUND as i32).into())
+                }
+                // skip empty tables
+                /*if entry.FirstThunk == 0 { continue }
+                let mut thunk = &*self.file.get_rva::<IMAGE_THUNK_DATA>(entry.FirstThunk as isize).ok_or(Error(Err::IATOutOfBounds))?;
+                while thunk.u1.AddressOfData() != &0 {
+                    let proc_name = if (thunk.u1.Ordinal() & IMAGE_ORDINAL_FLAG) != 0 { thunk.u1.Ordinal() } else { self.file.get_rva::<i8>(thunk.u1.AddressOfData()).ok_or(Error(Err::ProcNameOutOfBounds))? };
+                }*/
             }
         }
         Ok(())
@@ -187,6 +197,12 @@ mod test {
         unsafe {
             image.run().unwrap();
         }
+    }
+
+    #[test]
+    #[should_panic]
+    fn bad_mod() {
+        let _ = PortableExecutable::load("test/badmod.exe").unwrap();
     }
 
     #[test]

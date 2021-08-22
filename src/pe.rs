@@ -48,7 +48,6 @@ impl<'a> PortableExecutable<'a> {
         };
         // resolve imports from the header IATs
         pe.resolve_imports()?;
-        // process relocations
         // protect sections
         pe.protect_sections()?;
         Ok(pe)

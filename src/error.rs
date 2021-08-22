@@ -2,7 +2,7 @@
 pub enum Err {
     DOSOutOfBounds,
     NTOutOfBounds,
-    UnsupportedArchitecture,
+    UnsupportedArch,
     SectOutOfBounds,
     EPOutOfBounds,
     IDOutOfBounds,
@@ -20,7 +20,7 @@ impl Error {
         match self.0 {
             Err::DOSOutOfBounds => "The DOS header was out of bounds",
             Err::NTOutOfBounds => "The NT header was out of bounds",
-            Err::UnsupportedArchitecture => {
+            Err::UnsupportedArch => {
                 "The architecture was unsupported. Only ARM64/x86-64 is supported."
             }
             Err::SectOutOfBounds => "A section header was out of bounds",

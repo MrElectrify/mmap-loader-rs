@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::{
     error::{Err, Error},
     map::MappedFile,
-    primitives::protected_write,
+    primitives::{protected_write, ProtectionGuard},
 };
 
 use log::debug;
@@ -21,8 +21,9 @@ use winapi::um::{
 pub struct PortableExecutable<'a> {
     file: MappedFile,
     nt_headers: &'a IMAGE_NT_HEADERS64,
-    _section_headers: &'a [IMAGE_SECTION_HEADER],
+    section_headers: &'a [IMAGE_SECTION_HEADER],
     entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize,
+    section_protections: Vec<ProtectionGuard>,
 }
 
 impl<'a> PortableExecutable<'a> {
@@ -41,11 +42,15 @@ impl<'a> PortableExecutable<'a> {
         let mut pe = PortableExecutable {
             file,
             nt_headers,
-            _section_headers: section_headers,
+            section_headers,
             entry_point,
+            section_protections: Vec::new(),
         };
+        // resolve imports from the header IATs
         pe.resolve_imports()?;
         // process relocations
+        // protect sections
+        pe.protect_sections()?;
         Ok(pe)
     }
 
@@ -89,7 +94,7 @@ impl<'a> PortableExecutable<'a> {
             if nt_headers.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64
                 || nt_headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
             {
-                return Err(Error(Err::DOSOutOfBounds).into());
+                return Err(Error(Err::UnsupportedArch).into());
             }
             // load section headers
             let section_headers = std::slice::from_raw_parts(
@@ -104,6 +109,22 @@ impl<'a> PortableExecutable<'a> {
             );
             Ok((nt_headers, section_headers))
         }
+    }
+
+    /// Protects all of the sections with their specified protections
+    fn protect_sections(&mut self) -> Result<()> {
+        for &section in self.section_headers {
+            unsafe {
+                self.section_protections.push(ProtectionGuard::new(
+                    self.file
+                        .get_rva_mut::<c_void>(section.VirtualAddress as isize)
+                        .ok_or(Error(Err::SectOutOfBounds))?,
+                    *section.Misc.VirtualSize() as usize,
+                    PortableExecutable::section_flags_to_prot(section.Characteristics),
+                )?)
+            }
+        }
+        Ok(())
     }
 
     /// Resolves imports from the NT headers
@@ -130,7 +151,9 @@ impl<'a> PortableExecutable<'a> {
         }
     }
 
-    /// Resolves imports from the specified import descriptors
+    /// Resolves imports from the specified import descriptors. This
+    /// is separate because some executables have separate IATs from the
+    /// NT header IATs, and it is necessary to resolve them as well
     ///
     /// # Arguments
     ///
@@ -192,9 +215,9 @@ impl<'a> PortableExecutable<'a> {
                     if func.is_null() {
                         return Err(std::io::Error::last_os_error().into());
                     }
-                    let mut func_ptr = (*thunk).u1.Function_mut() as *mut ULONGLONG;
+                    let func_ptr = (*thunk).u1.Function_mut() as *mut ULONGLONG;
                     // write the function address
-                    protected_write(&mut func_ptr, func as *mut ULONGLONG)?;
+                    protected_write(func_ptr, func as ULONGLONG)?;
                     thunk = thunk.add(1);
                 }
             }
@@ -215,6 +238,21 @@ impl<'a> PortableExecutable<'a> {
             null(),
         ))
     }
+
+    /// Converts section flags to page protection flags
+    ///
+    /// # Arguments
+    ///
+    /// `section_flags`: The section flags
+    fn section_flags_to_prot(section_flags: u32) -> u32 {
+        if section_flags & IMAGE_SCN_MEM_EXECUTE != 0 {
+            PAGE_EXECUTE_READ
+        } else if section_flags & IMAGE_SCN_MEM_WRITE != 0 {
+            PAGE_READWRITE
+        } else {
+            PAGE_READONLY
+        }
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +264,7 @@ mod test {
     };
 
     #[test]
+    #[serial]
     fn bad_dos() {
         let err: std::io::Error = PortableExecutable::load("test/baddos.exe")
             .err()
@@ -236,6 +275,7 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn bad_section() {
         let err: std::io::Error = PortableExecutable::load("test/badsection.exe")
             .err()
@@ -246,6 +286,7 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn bad_entry() {
         let err: Error = PortableExecutable::load("test/badentry.exe")
             .err()
@@ -256,6 +297,7 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn bad_mod() {
         let err: std::io::Error = PortableExecutable::load("test/badmod.exe")
             .err()
@@ -266,6 +308,7 @@ mod test {
     }
 
     #[test]
+    #[serial]
     fn bad_proc() {
         let err: std::io::Error = PortableExecutable::load("test/badproc.exe")
             .err()
@@ -286,24 +329,13 @@ mod test {
 
     // we only support x86-64/ARM64 for now
     #[test]
-    #[should_panic]
+    #[serial]
     fn x86_image() {
-        let _ = PortableExecutable::load("test/x86.exe").unwrap();
-    }
-
-    #[test]
-    fn crt_image() {
-        let image = PortableExecutable::load("test/crt.exe").unwrap();
-        unsafe {
-            assert_eq!(image.run().unwrap(), 55);
-        }
-    }
-
-    #[test]
-    fn stdout_image() {
-        let image = PortableExecutable::load("test/stdout.exe").unwrap();
-        unsafe {
-            assert_eq!(image.run().unwrap(), 55);
-        }
+        let err: Error = PortableExecutable::load("test/x86.exe")
+            .err()
+            .unwrap()
+            .downcast()
+            .unwrap();
+        assert_eq!(err.0, Err::UnsupportedArch);
     }
 }

@@ -93,7 +93,7 @@ impl Drop for ProtectionGuard {
 /// `val`: The value to write
 pub unsafe fn protected_write<T>(addr: *mut T, val: T) -> Result<()> {
     // protect the value first with READWRITE
-    let _ = ProtectionGuard::new(
+    let _prot_guard = ProtectionGuard::new(
         addr as *mut c_void,
         std::mem::size_of_val(&val),
         PAGE_READWRITE,

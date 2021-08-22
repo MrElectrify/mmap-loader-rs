@@ -154,13 +154,7 @@ mod test {
     use serial_test::serial;
 
     #[test]
-    #[should_panic]
     fn bad_file() {
-        let _ = MappedFile::load("badpath").unwrap();
-    }
-
-    #[test]
-    fn bad_file_err() {
         let err = MappedFile::load("badpath")
             .unwrap_err()
             .downcast::<Error>()

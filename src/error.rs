@@ -1,5 +1,6 @@
 #[derive(Debug, PartialEq)]
 pub enum Err {
+    FileNotFound,
     DOSOutOfBounds,
     NTOutOfBounds,
     UnsupportedArch,
@@ -18,6 +19,7 @@ pub struct Error(pub Err);
 impl Error {
     pub fn err_str(&self) -> &str {
         match self.0 {
+            Err::FileNotFound => "The file path was not resolved",
             Err::DOSOutOfBounds => "The DOS header was out of bounds",
             Err::NTOutOfBounds => "The NT header was out of bounds",
             Err::UnsupportedArch => {

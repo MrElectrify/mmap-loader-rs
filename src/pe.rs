@@ -1,54 +1,151 @@
-use anyhow::Result;
-
 use crate::{
     error::{Err, Error},
     map::MappedFile,
     primitives::{protected_write, ProtectionGuard},
 };
-
+use anyhow::Result;
 use log::debug;
-
+use ntapi::{ntldr::{LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE, LDR_DDAG_NODE_u, LDR_DDAG_STATE, LdrModulesReadyToRun, PLDR_INIT_ROUTINE}, ntrtl::RtlInitUnicodeString};
 use std::{
     ffi::{c_void, CStr},
-    ptr::null,
+    os::windows::prelude::OsStrExt,
+    path::{Path, PathBuf},
+    ptr::null_mut,
 };
-
-use winapi::um::{
-    libloaderapi::{GetProcAddress, LoadLibraryA},
-    winnt::*,
+use winapi::{
+    shared::ntdef::{
+        BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
+        UNICODE_STRING,
+    },
+    um::{
+        libloaderapi::{GetProcAddress, LoadLibraryA},
+        winnt::{
+            DLL_PROCESS_ATTACH, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DOS_HEADER,
+            IMAGE_FILE_MACHINE_AMD64, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR,
+            IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_ORDINAL_FLAG,
+            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_THUNK_DATA,
+            PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE,
+        },
+    },
 };
 
 pub struct PortableExecutable<'a> {
     file: MappedFile,
+    file_name: PathBuf,
+    file_path: PathBuf,
     nt_headers: &'a IMAGE_NT_HEADERS64,
     section_headers: &'a [IMAGE_SECTION_HEADER],
-    entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize,
+    entry_point: PLDR_INIT_ROUTINE,
     section_protections: Vec<ProtectionGuard>,
+    loader_entry: LDR_DATA_TABLE_ENTRY,
+    ddag_node: LDR_DDAG_NODE,
 }
 
 impl<'a> PortableExecutable<'a> {
+    /// Initializes the loader entry
+    fn init_ldr_entry(&mut self) -> Result<()> {
+        self.loader_entry.DllBase = self.file.contents_mut();
+        self.loader_entry.DdagNode = &mut self.ddag_node;
+        unsafe {
+            RtlInitUnicodeString(
+                &mut self.loader_entry.BaseDllName,
+                self.file_name
+                    .as_os_str()
+                    .encode_wide()
+                    .collect::<Vec<u16>>()
+                    .as_ptr(),
+            );
+            RtlInitUnicodeString(
+                &mut self.loader_entry.FullDllName,
+                self.file_path
+                    .as_os_str()
+                    .encode_wide()
+                    .collect::<Vec<u16>>()
+                    .as_ptr(),
+            );
+        }
+        self.ddag_node.State = LdrModulesReadyToRun;
+        self.ddag_node.LoadCount = u32::MAX;
+        Ok(())
+    }
+
     /// Loads the portable executable, processing any options
     ///
     /// # Arguments
     ///
     /// `path`: The path to the executable file
     pub fn load(path: &str) -> Result<PortableExecutable> {
-        // first map the file
         let mut file = MappedFile::load(path)?;
-        // load the headers
+        let path = Path::new(path);
+        let file_name = path.file_name().ok_or(Error(Err::FileNotFound))?;
+        let file_path = path.canonicalize()?;
+        debug!(
+            "Loading {} at path {}",
+            file_name.to_string_lossy(),
+            file_path.to_string_lossy()
+        );
         let (nt_headers, section_headers) = PortableExecutable::load_headers(&mut file)?;
-        // load the entry point
         let entry_point = PortableExecutable::load_entry_point(&mut file, nt_headers)?;
         let mut pe = PortableExecutable {
             file,
+            file_name: file_name.into(),
+            file_path,
             nt_headers,
             section_headers,
             entry_point,
             section_protections: Vec::new(),
+            loader_entry: LDR_DATA_TABLE_ENTRY {
+                InLoadOrderLinks: LIST_ENTRY::default(),
+                InMemoryOrderLinks: LIST_ENTRY::default(),
+                u1: LDR_DATA_TABLE_ENTRY_u1 {
+                    InInitializationOrderLinks: LIST_ENTRY::default(),
+                },
+                DllBase: null_mut(),
+                EntryPoint: None,
+                SizeOfImage: 0,
+                FullDllName: UNICODE_STRING::default(),
+                BaseDllName: UNICODE_STRING::default(),
+                u2: LDR_DATA_TABLE_ENTRY_u2 { Flags: 0 },
+                ObsoleteLoadCount: 0,
+                TlsIndex: 0,
+                HashLinks: LIST_ENTRY::default(),
+                TimeDateStamp: 0,
+                EntryPointActivationContext: null_mut(),
+                Lock: null_mut(),
+                DdagNode: null_mut(),
+                NodeModuleLink: LIST_ENTRY::default(),
+                LoadContext: null_mut(),
+                ParentDllBase: null_mut(),
+                SwitchBackContext: null_mut(),
+                BaseAddressIndexNode: RTL_BALANCED_NODE::default(),
+                MappingInfoIndexNode: RTL_BALANCED_NODE::default(),
+                OriginalBase: 0,
+                LoadTime: LARGE_INTEGER::default(),
+                BaseNameHashValue: 0,
+                LoadReason: 0,
+                ImplicitPathOptions: 0,
+                ReferenceCount: 0,
+                DependentLoadFlags: 0,
+                SigningLevel: 0,
+            },
+            ddag_node: LDR_DDAG_NODE {
+                Modules: LIST_ENTRY::default(),
+                ServiceTagList: null_mut(),
+                LoadCount: 0,
+                LoadWhileUnloadingCount: 0,
+                LowestLink: 0,
+                u: LDR_DDAG_NODE_u {
+                    Dependencies: LDRP_CSLIST { Tail: null_mut() },
+                },
+                IncomingDependencies: LDRP_CSLIST { Tail: null_mut() },
+                State: LDR_DDAG_STATE::default(),
+                CondenseLink: SINGLE_LIST_ENTRY::default(),
+                PreorderNumber: 0,
+            },
         };
-        // resolve imports from the header IATs
         pe.resolve_imports()?;
-        // protect sections
+        pe.init_ldr_entry()?;
+        // protect last
         pe.protect_sections()?;
         Ok(pe)
     }
@@ -61,15 +158,14 @@ impl<'a> PortableExecutable<'a> {
     fn load_entry_point(
         file: &mut MappedFile,
         nt_headers: &IMAGE_NT_HEADERS64,
-    ) -> Result<unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize> {
+    ) -> Result<PLDR_INIT_ROUTINE> {
         unsafe {
             // resolve the entry point
             // we transmute here because I have no earthly idea how to return a generic function
-            let entry_point: unsafe extern "C" fn(*const c_void, u32, *const c_void) -> isize =
-                std::mem::transmute(
-                    file.get_rva::<u8>(nt_headers.OptionalHeader.AddressOfEntryPoint as isize)
-                        .ok_or(Error(Err::EPOutOfBounds))?,
-                );
+            let entry_point: PLDR_INIT_ROUTINE = std::mem::transmute(
+                file.get_rva::<u8>(nt_headers.OptionalHeader.AddressOfEntryPoint as isize)
+                    .ok_or(Error(Err::EPOutOfBounds))?,
+            );
             Ok(entry_point)
         }
     }
@@ -230,11 +326,11 @@ impl<'a> PortableExecutable<'a> {
     ///
     /// The safety of this function is entirely dependent on whether or not
     /// the underlying executable is safe
-    pub unsafe fn run(self) -> Result<isize> {
-        Ok((self.entry_point)(
-            self.file.contents(),
+    pub unsafe fn run(mut self) -> Result<BOOLEAN> {
+        Ok((self.entry_point.unwrap())(
+            self.file.contents_mut(),
             DLL_PROCESS_ATTACH,
-            null(),
+            null_mut(),
         ))
     }
 

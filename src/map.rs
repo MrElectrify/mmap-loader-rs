@@ -19,8 +19,8 @@ pub struct MappedFile {
 }
 
 impl MappedFile {
-    /// Returns the contents of the mapped file
-    pub fn contents(&self) -> *const c_void {
+    /// Returns the mutable contents of the mapped file
+    pub fn contents_mut(&mut self) -> *mut c_void {
         self.contents
     }
 

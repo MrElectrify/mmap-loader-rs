@@ -3,17 +3,27 @@ name = "mmap-loader"
 version = "0.1.0"
 edition = "2018"
 
+[[bin]]
+name = "mmap-offset-server"
+path = "src/offset-server.rs"
+
 [profile.release]
 codegen-units = 1
 debug = false
 panic = "abort"
 lto = true
 
+[build-dependencies]
+tonic-build = "0.5"
+
 [dependencies]
 anyhow = "1"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
 ntapi = "0.3"
+prost = "0.8"
 simple_logger = { version = "1.1" }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tonic = "0.5"
 winapi = { version = "0.3", features = ["impl-default", "fileapi", "handleapi", "memoryapi", "std", "winbase"] }
 
 [dev-dependencies]

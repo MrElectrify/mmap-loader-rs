@@ -1,0 +1,24 @@
+syntax = "proto3";
+package mmap;
+
+service Offset {
+    rpc GetOffsets (OffsetsRequest) returns (OffsetsResponse);
+}
+
+message OffsetsRequest {
+    string ntdll_hash = 1;
+}
+
+message OffsetsResponse {
+    oneof response {
+        string error = 1;
+        Offsets offsets = 2;
+    }
+}
+
+message Offsets {
+    uint64 LdrpInsertDataTableEntry = 1;
+    uint64 LdrpInsertModuleToIndex = 2; 
+    uint64 LdrpHandleTlsData = 3;
+    uint64 RtlInsertInvertedFunctionTable = 4;
+}

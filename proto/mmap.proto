@@ -10,13 +10,6 @@ message OffsetsRequest {
 }
 
 message OffsetsResponse {
-    oneof response {
-        string error = 1;
-        Offsets offsets = 2;
-    }
-}
-
-message Offsets {
     uint64 LdrpInsertDataTableEntry = 1;
     uint64 LdrpInsertModuleToIndex = 2; 
     uint64 LdrpHandleTlsData = 3;

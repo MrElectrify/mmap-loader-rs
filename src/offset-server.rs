@@ -13,10 +13,7 @@ struct OffsetHandler {}
 impl Offset for OffsetHandler {
     async fn get_offsets(&self, request: Request<OffsetsRequest>) -> Result<Response<OffsetsResponse>, Status> {
         println!("Request: {:?}", request);
-        let reply = OffsetsResponse {
-            response: Some(offset_server::offsets_response::Response::Error("ERR".into()))
-        };
-        Ok(Response::new(reply))
+        Err(Status::not_found("The hash was not found"))
     }
 }
 

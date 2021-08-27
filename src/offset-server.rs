@@ -19,7 +19,7 @@ impl Offset for OffsetHandler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "0.0.0.0:50066".parse()?;
+    let addr = "0.0.0.0:37756".parse()?;
     let offset_handler = OffsetHandler::default();
     Server::builder()
         .add_service(OffsetServer::new(offset_handler))

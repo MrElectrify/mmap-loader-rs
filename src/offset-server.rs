@@ -6,10 +6,10 @@ use offsets::{
     offset_server::{Offset, OffsetServer},
     {OffsetsRequest, OffsetsResponse},
 };
-use pdb::{FallibleIterator, Source, SymbolTable, PDB};
+use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
-use std::{collections::HashMap, io::Cursor};
+use std::{borrow::Cow, collections::HashMap, io::Cursor};
 use tokio::{
     fs::{read_to_string, write},
     sync::Mutex,
@@ -34,54 +34,39 @@ struct OffsetHandler {
     database: Mutex<OffsetsDatabase>,
 }
 
+    macro_rules! get_offset {
+        ($map:expr, $name:expr) => {
+            match $map.get($name) {
+                Some(offset) => offset,
+                None => {
+                    eprintln!("Failed to find offset for {}", $name);
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
 fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Option<Offsets>> {
     // parse the pdb
     let mut pdb: PDB<'a, S> = pdb::PDB::open(s)?;
     let symbol_table: SymbolTable<'a> = pdb.global_symbols()?;
     let address_map = pdb.address_map()?;
-    let mut map = HashMap::new();
-    let mut symbols = symbol_table.iter();
-    while let Some(symbol) = symbols.next()? {
-        match symbol.parse() {
-            Ok(pdb::SymbolData::Public(proc)) if proc.function => {
-                match proc.offset.to_rva(&address_map) {
-                    Some(rva) => {
-                        map.insert(proc.name.to_string(), rva.0);
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-    let ldrp_insert_data_table_entry = *match map.get("LdrpInsertDataTableEntry") {
-        Some(offset) => offset,
-        None => {
-            eprintln!("Failed to find offset for LdrpInsertDataTableEntry");
-            return Ok(None);
-        }
-    };
-    let ldrp_insert_module_to_index = *match map.get("LdrpInsertModuleToIndex") {
-        Some(offset) => offset,
-        None => {
-            eprintln!("Failed to find offset for LdrpInsertModuleToIndex");
-            return Ok(None);
-        }
-    };
-    let ldrp_handle_tls_data = *match map.get("LdrpHandleTlsData") {
-        Some(offset) => offset,
-        None => {
-            eprintln!("Failed to find offset for LdrpHandleTlsData");
-            return Ok(None);
-        }
-    };
-    let rtl_insert_inverted_function_table = *match map.get("RtlInsertInvertedFunctionTable") {
-        Some(offset) => offset,
-        None => {
-            eprintln!("Failed to find offset for RtlInsertInvertedFunctionTable");
-            return Ok(None);
-        }
-    };
+    let map: HashMap<Cow<str>, u32> = symbol_table
+        .iter()
+        .map(|sym| sym.parse())
+        .filter_map(|data| match data {
+            SymbolData::Public(proc) if proc.function => Ok(Some(proc)),
+            _ => Ok(None),
+        })
+        .filter_map(|proc| match proc.offset.to_rva(&address_map) {
+            Some(rva) => Ok(Some((proc.name.to_string(), rva.0))),
+            _ => Ok(None),
+        })
+        .collect()?;
+    let ldrp_insert_data_table_entry = *get_offset!(map, "LdrpInsertDataTableEntry");
+    let ldrp_insert_module_to_index = *get_offset!(map, "LdrpInsertModuleToIndex");
+    let ldrp_handle_tls_data = *get_offset!(map, "LdrpHandleTlsData");
+    let rtl_insert_inverted_function_table = *get_offset!(map, "RtlInsertInvertedFunctionTable");
     Ok(Some(Offsets {
         ldrp_insert_data_table_entry,
         ldrp_insert_module_to_index,

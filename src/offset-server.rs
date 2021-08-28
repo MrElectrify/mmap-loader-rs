@@ -35,7 +35,7 @@ struct OffsetHandler {
 }
 
     macro_rules! get_offset {
-        ($map:expr, $name:expr) => {
+        ($map:ident, $name:literal) => {
             match $map.get($name) {
                 Some(offset) => offset,
                 None => {

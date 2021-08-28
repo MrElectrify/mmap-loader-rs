@@ -10,8 +10,8 @@ message OffsetsRequest {
 }
 
 message OffsetsResponse {
-    uint64 LdrpInsertDataTableEntry = 1;
-    uint64 LdrpInsertModuleToIndex = 2; 
-    uint64 LdrpHandleTlsData = 3;
-    uint64 RtlInsertInvertedFunctionTable = 4;
+    uint32 LdrpInsertDataTableEntry = 1;
+    uint32 LdrpInsertModuleToIndex = 2; 
+    uint32 LdrpHandleTlsData = 3;
+    uint32 RtlInsertInvertedFunctionTable = 4;
 }

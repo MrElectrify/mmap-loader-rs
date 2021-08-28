@@ -5,7 +5,13 @@ use crate::{
 };
 use anyhow::Result;
 use log::debug;
-use ntapi::{ntldr::{LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE, LDR_DDAG_NODE_u, LDR_DDAG_STATE, LdrModulesReadyToRun, PLDR_INIT_ROUTINE}, ntrtl::RtlInitUnicodeString};
+use ntapi::{
+    ntldr::{
+        LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
+        LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DDAG_NODE, LDR_DDAG_STATE, PLDR_INIT_ROUTINE,
+    },
+    ntrtl::RtlInitUnicodeString,
+};
 use std::{
     ffi::{c_void, CStr},
     os::windows::prelude::OsStrExt,

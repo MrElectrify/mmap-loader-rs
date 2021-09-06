@@ -9,7 +9,7 @@ use offsets::{
 use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
 use serde_derive::{Deserialize, Serialize};
-use std::{borrow::Cow, collections::HashMap, io::Cursor};
+use std::{borrow::Cow, collections::HashMap, env, io::Cursor, net::SocketAddr};
 use tokio::{
     fs::{read_to_string, write},
     sync::Mutex,
@@ -186,8 +186,20 @@ impl Offset for OffsetHandler {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "0.0.0.0:37756".parse()?;
+async fn main() -> Result<(), anyhow::Error> {
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 3 {
+        eprintln!("Usage: {} <address:ipv4> <port:u16>", args[0]);
+        return Ok(());
+    }
+    let addr = match args.get(1) {
+        Some(addr) => addr.parse(),
+        None => "0.0.0.0".parse(),
+    }?;
+    let port = match args.get(2) {
+        Some(addr) => addr.parse(),
+        None => "63".parse(),
+    }?;
     let database = Mutex::new(match read_to_string("db.json").await {
         Ok(s) => serde_json::from_str(&s)?,
         _ => OffsetsDatabase::default(),
@@ -195,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let offset_handler = OffsetHandler { database };
     Server::builder()
         .add_service(OffsetServer::new(offset_handler))
-        .serve(addr)
+        .serve(SocketAddr::new(addr, port))
         .await?;
     Ok(())
 }

@@ -11,6 +11,9 @@ pub enum Err {
     IATOutOfBounds,
     ProcNameOutOfBounds,
     NullProcName,
+    NtDllNotLoaded,
+    NtDllDebugType,
+    NtDllRsdsSig,
 }
 
 #[derive(Debug)]
@@ -32,6 +35,9 @@ impl Error {
             Err::IATOutOfBounds => "The IAT thunk was out of bounds",
             Err::ProcNameOutOfBounds => "The procedure name was out of bounds",
             Err::NullProcName => "The procedure name was null",
+            Err::NtDllNotLoaded => "NTDLL was not loaded",
+            Err::NtDllDebugType => "NTDLL debug info was missing",
+            Err::NtDllRsdsSig => "NTDLL RSDS signature was missing",
         }
     }
 }

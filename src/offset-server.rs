@@ -198,7 +198,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }?;
     let port = match args.get(2) {
         Some(addr) => addr.parse(),
-        None => "63".parse(),
+        None => "42220".parse(),
     }?;
     let database = Mutex::new(match read_to_string("db.json").await {
         Ok(s) => serde_json::from_str(&s)?,

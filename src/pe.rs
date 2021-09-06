@@ -1,9 +1,14 @@
+pub mod offsets {
+    tonic::include_proto!("mmap");
+}
+
 use crate::{
     error::{Err, Error},
     map::MappedFile,
     primitives::{protected_write, ProtectionGuard},
 };
 use anyhow::Result;
+use lazy_static::lazy_static;
 use log::debug;
 use ntapi::{
     ntldr::{
@@ -12,6 +17,7 @@ use ntapi::{
     },
     ntrtl::RtlInitUnicodeString,
 };
+use offsets::{offset_client::OffsetClient, OffsetsRequest};
 use std::{
     ffi::{c_void, CStr},
     os::windows::prelude::OsStrExt,
@@ -19,14 +25,18 @@ use std::{
     ptr::null_mut,
 };
 use winapi::{
-    shared::ntdef::{
-        BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
-        UNICODE_STRING,
+    shared::{
+        guiddef::GUID,
+        ntdef::{
+            BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
+            UNICODE_STRING,
+        },
     },
     um::{
-        libloaderapi::{GetProcAddress, LoadLibraryA},
+        libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
         winnt::{
-            DLL_PROCESS_ATTACH, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DOS_HEADER,
+            DLL_PROCESS_ATTACH, IMAGE_DEBUG_DIRECTORY, IMAGE_DEBUG_TYPE_CODEVIEW,
+            IMAGE_DIRECTORY_ENTRY_DEBUG, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DOS_HEADER,
             IMAGE_FILE_MACHINE_AMD64, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR,
             IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_ORDINAL_FLAG,
             IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_THUNK_DATA,
@@ -47,9 +57,102 @@ pub struct PortableExecutable<'a> {
     ddag_node: LDR_DDAG_NODE,
 }
 
+#[allow(non_snake_case)]
+struct NtFunctions {
+    LdrpInsertModuleToIndex: unsafe fn(
+        pTblEntry: *const LDR_DATA_TABLE_ENTRY,
+        pNtHeaders: *const IMAGE_NT_HEADERS64,
+    ) -> u32,
+}
+
+impl NtFunctions {
+    /// Gets the loaded NTDLL hash
+    ///
+    /// # Arguments
+    ///
+    /// `ntdll`: The NTDLL instance pointer
+    fn get_ntdll_hash(ntdll: *const u8) -> Result<String, Error> {
+        unsafe {
+            let dos_header = ntdll as *const IMAGE_DOS_HEADER;
+            if dos_header.is_null() {
+                return Err(Error(Err::FileNotFound));
+            }
+            let nt_headers = &*((dos_header as *const u8).offset((*dos_header).e_lfanew as isize)
+                as *const IMAGE_NT_HEADERS64);
+            let debug_entry = &*((dos_header as *const u8).offset(
+                nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG as usize]
+                    .VirtualAddress as isize,
+            ) as *const IMAGE_DEBUG_DIRECTORY);
+            if debug_entry.Type != IMAGE_DEBUG_TYPE_CODEVIEW {
+                return Err(Error(Err::NtDllDebugType));
+            }
+            let codeview_entry = &*((dos_header as *const u8)
+                .offset((*debug_entry).AddressOfRawData as isize)
+                as *const IMAGE_DEBUG_CODEVIEW);
+            if !codeview_entry
+                .rsds_signature
+                .eq_ignore_ascii_case("RSDS".as_bytes())
+            {
+                return Err(Error(Err::NtDllRsdsSig));
+            }
+            Ok(format!(
+                "{:08X}{:04X}{:04X}{}{:X}",
+                codeview_entry.guid.Data1,
+                codeview_entry.guid.Data2,
+                codeview_entry.guid.Data3,
+                codeview_entry
+                    .guid
+                    .Data4
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<Vec<String>>()
+                    .join(""),
+                codeview_entry.age
+            ))
+        }
+    }
+
+    /// Resolves the functions used by the mapper
+    async fn resolve() -> Result<NtFunctions, anyhow::Error> {
+        let mut client = OffsetClient::connect("http://localhost:42220").await?;
+        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        let request = tonic::Request::new(OffsetsRequest {
+            ntdll_hash: NtFunctions::get_ntdll_hash(ntdll)?,
+        });
+        let response = client.get_offsets(request).await?.into_inner();
+        unsafe {
+            Ok(NtFunctions {
+                LdrpInsertModuleToIndex: std::mem::transmute(
+                    ntdll.offset(response.ldrp_insert_module_to_index as isize),
+                ),
+            })
+        }
+    }
+}
+
+fn to_wide(string: &str) -> Vec<u16> {
+    string
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<u16>>()
+}
+
+#[allow(non_camel_case_types)]
+#[repr(C)]
+struct IMAGE_DEBUG_CODEVIEW {
+    rsds_signature: [u8; 4],
+    guid: GUID,
+    age: u32,
+}
+
+lazy_static! {
+    static ref FUNCS: Result<NtFunctions, anyhow::Error> =
+        tokio::runtime::Runtime::new()?.block_on(NtFunctions::resolve());
+}
+
 impl<'a> PortableExecutable<'a> {
     /// Initializes the loader entry
-    fn init_ldr_entry(&mut self) -> Result<()> {
+    fn init_ldr_entry(&mut self, nt_headers: &IMAGE_NT_HEADERS64) -> Result<()> {
         self.loader_entry.DllBase = self.file.contents_mut();
         self.loader_entry.DdagNode = &mut self.ddag_node;
         unsafe {
@@ -72,6 +175,9 @@ impl<'a> PortableExecutable<'a> {
         }
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
+        unsafe {
+            ((*FUNCS).as_ref().unwrap().LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers)
+        };
         Ok(())
     }
 
@@ -150,7 +256,7 @@ impl<'a> PortableExecutable<'a> {
             },
         };
         pe.resolve_imports()?;
-        pe.init_ldr_entry()?;
+        pe.init_ldr_entry(nt_headers)?;
         // protect last
         pe.protect_sections()?;
         Ok(pe)

@@ -16,7 +16,7 @@ use tokio::{
 };
 use tonic::{transport::Server, Request, Response, Status};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 struct Offsets {
     ldrp_insert_data_table_entry: u32,
     ldrp_insert_module_to_index: u32,
@@ -34,17 +34,17 @@ struct OffsetHandler {
     database: Mutex<OffsetsDatabase>,
 }
 
-    macro_rules! get_offset {
-        ($map:ident, $name:literal) => {
-            match $map.get($name) {
-                Some(offset) => offset,
-                None => {
-                    eprintln!("Failed to find offset for {}", $name);
-                    return Ok(None);
-                }
+macro_rules! get_offset {
+    ($map:ident, $name:literal) => {
+        match $map.get($name) {
+            Some(offset) => offset,
+            None => {
+                eprintln!("Failed to find offset for {}", $name);
+                return Ok(None);
             }
         }
-    }
+    };
+}
 
 fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Option<Offsets>> {
     // parse the pdb

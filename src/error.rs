@@ -14,7 +14,7 @@ pub enum Err {
     NtDllNotLoaded,
     NtDllDebugType,
     NtDllRsdsSig,
-    LdrEntry
+    LdrEntry,
 }
 
 #[derive(Debug)]
@@ -39,7 +39,7 @@ impl Error {
             Err::NtDllNotLoaded => "NTDLL was not loaded",
             Err::NtDllDebugType => "NTDLL debug info was missing",
             Err::NtDllRsdsSig => "NTDLL RSDS signature was missing",
-            Err::LdrEntry => "The loader entry failed to initialize"
+            Err::LdrEntry => "The loader entry failed to initialize",
         }
     }
 }

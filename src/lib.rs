@@ -1,7 +1,7 @@
 mod db;
 pub mod error;
 mod map;
-pub mod pe;
 mod offsets;
+pub mod pe;
 mod primitives;
 mod util;

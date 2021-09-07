@@ -1,4 +1,10 @@
-use crate::{error::{Err, Error}, map::MappedFile, offsets::{offset_client::OffsetClient, OffsetsRequest}, primitives::{protected_write, ProtectionGuard}, util::to_wide};
+use crate::{
+    error::{Err, Error},
+    map::MappedFile,
+    offsets::{offset_client::OffsetClient, OffsetsRequest},
+    primitives::{protected_write, ProtectionGuard},
+    util::to_wide,
+};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use log::debug;
@@ -41,9 +47,7 @@ struct NtFunctions {
         pTblEntry: *const LDR_DATA_TABLE_ENTRY,
         pNtHeaders: *const IMAGE_NT_HEADERS64,
     ) -> u32,
-    LdrpUnloadNode: unsafe fn(
-        pDdagNode: *const LDR_DDAG_NODE
-    )
+    LdrpUnloadNode: unsafe fn(pDdagNode: *const LDR_DDAG_NODE),
 }
 
 impl NtFunctions {
@@ -107,8 +111,8 @@ impl NtFunctions {
                     ntdll.offset(response.ldrp_insert_module_to_index as isize),
                 ),
                 LdrpUnloadNode: std::mem::transmute(
-                    ntdll.offset(response.ldrp_unload_node as isize)
-                )
+                    ntdll.offset(response.ldrp_unload_node as isize),
+                ),
             })
         }
     }
@@ -147,22 +151,20 @@ impl<'a> PortableExecutable<'a> {
         unsafe {
             RtlInitUnicodeString(
                 &mut self.loader_entry.BaseDllName,
-                to_wide(&self.file_name
-                    .to_string_lossy())
-                    .as_ptr(),
+                to_wide(&self.file_name.to_string_lossy()).as_ptr(),
             );
             RtlInitUnicodeString(
                 &mut self.loader_entry.FullDllName,
-                to_wide(&self.file_path
-                    .to_string_lossy())
-                    .as_ptr(),
+                to_wide(&self.file_path.to_string_lossy()).as_ptr(),
             );
         }
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         unsafe {
-            if ((*FUNCS).as_ref().unwrap().LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers) == 0 {
-                return Err(Error(Err::LdrEntry).into())
+            if ((*FUNCS).as_ref().unwrap().LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers)
+                == 0
+            {
+                return Err(Error(Err::LdrEntry).into());
             }
         };
         Ok(())

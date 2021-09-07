@@ -1,8 +1,6 @@
 mod db;
 mod offsets;
-use crate::db::{
-    Offsets, OffsetsDatabase
-};
+use crate::db::{Offsets, OffsetsDatabase};
 use offsets::{
     offset_server::{Offset, OffsetServer},
     {OffsetsRequest, OffsetsResponse},
@@ -54,7 +52,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
     let ldrp_unload_node = *get_offset!(map, "LdrpUnloadNode");
     Ok(Some(Offsets {
         ldrp_insert_module_to_index,
-        ldrp_unload_node
+        ldrp_unload_node,
     }))
 }
 

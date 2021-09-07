@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, path::PathBuf};
 
 use mmap_loader::server::Server;
 
@@ -7,7 +7,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().collect();
     if args.len() > 4 {
         eprintln!(
-            "Usage: {} <address:ipv4:0.0.0.0> <port:u16:42220> <cache_path:path:cache.json>",
+            "Usage: {} <address:ip:0.0.0.0> <port:u16:42220> <cache_path:path:cache.json>",
             args[0]
         );
         return Ok(());
@@ -23,6 +23,6 @@ async fn main() -> Result<(), anyhow::Error> {
         .unwrap_or("42220")
         .parse()?;
     let cache_path = args.get(3).map(|str| str.as_str()).unwrap_or("cache.json");
-    let server = Server::new(SocketAddr::new(addr, port), cache_path)?;
+    let server = Server::new(SocketAddr::new(addr, port), PathBuf::from(cache_path))?;
     server.run().await
 }

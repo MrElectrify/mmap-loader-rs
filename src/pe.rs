@@ -176,6 +176,7 @@ impl<'a> PortableExecutable<'a> {
     ///
     /// `path`: The path to the executable file
     pub fn load(path: &str) -> Result<PortableExecutable> {
+        // first make sure we have
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
         let file_name = path.file_name().ok_or(Error(Err::FileNotFound))?;

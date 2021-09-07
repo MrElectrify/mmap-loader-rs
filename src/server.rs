@@ -7,19 +7,18 @@ use crate::{
 };
 use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
-use std::{borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, net::SocketAddr};
+use std::{
+    borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, net::SocketAddr,
+    path::PathBuf,
+};
 use tokio::{fs::write, sync::Mutex};
 use tonic::{transport, Request, Response, Status};
 
-#[derive(Debug)]
-struct OffsetHandler {
-    database: Mutex<OffsetsDatabase>,
-}
-
 /// An offset server that parses PDBs and sends the parsed addresses to the client
 pub struct Server {
-    handler: OffsetHandler,
+    database: Mutex<OffsetsDatabase>,
     endpoint: SocketAddr,
+    cache_path: PathBuf,
 }
 
 impl Server {
@@ -30,20 +29,24 @@ impl Server {
     ///
     /// `endpoint`: The network address to bind to
     /// `cache_path`: The path to the JSON cache. Will be created if it does not exist
-    pub fn new(endpoint: SocketAddr, cache_path: &str) -> Result<Server, anyhow::Error> {
-        let database = Mutex::new(match read_to_string(cache_path) {
+    pub fn new(endpoint: SocketAddr, cache_path: PathBuf) -> Result<Server, anyhow::Error> {
+        let database = Mutex::new(match read_to_string(&cache_path) {
             Ok(s) => serde_json::from_str(&s)?,
             _ => OffsetsDatabase::default(),
         });
-        let handler = OffsetHandler { database };
-        Ok(Server { handler, endpoint })
+        Ok(Server {
+            database,
+            endpoint,
+            cache_path,
+        })
     }
 
     /// Runs the server
     pub async fn run(self) -> Result<(), anyhow::Error> {
+        let endpoint = self.endpoint;
         transport::Server::builder()
-            .add_service(OffsetServer::new(self.handler))
-            .serve(self.endpoint)
+            .add_service(OffsetServer::new(self))
+            .serve(endpoint)
             .await?;
         Ok(())
     }
@@ -87,7 +90,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
 }
 
 #[tonic::async_trait]
-impl Offset for OffsetHandler {
+impl Offset for Server {
     async fn get_offsets(
         &self,
         request: Request<OffsetsRequest>,
@@ -171,11 +174,12 @@ impl Offset for OffsetHandler {
                 return Ok(Response::new(offsets.into()));
             }
         };
-        match write("db.json", &s).await {
+        match write(&self.cache_path, &s).await {
             Ok(_) => {}
             Err(e) => {
                 eprintln!(
-                    "Failed to write database to db.json: {}. Payload: {}",
+                    "Failed to write database to cache file {}: {}. Payload: {}",
+                    &self.cache_path.as_path().to_string_lossy(),
                     e.to_string(),
                     &s
                 )
@@ -196,56 +200,81 @@ mod test {
     }
 
     use super::*;
+    use serial_test::serial;
 
     #[tokio::test]
+    #[serial]
     async fn hash_length() {
         let database = Mutex::new(OffsetsDatabase::default());
-        let offset_handler = OffsetHandler { database };
+        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
+        let cache_path = "cache.json".into();
+        let server = Server {
+            database,
+            endpoint,
+            cache_path,
+        };
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "123".into(),
         });
-        let err = offset_handler.get_offsets(request).await.unwrap_err();
+        let err = server.get_offsets(request).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "Bad hash length");
     }
 
     #[tokio::test]
+    #[serial]
     async fn hash_digits() {
         let database = Mutex::new(OffsetsDatabase::default());
-        let offset_handler = OffsetHandler { database };
+        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
+        let cache_path = "cache.json".into();
+        let server = Server {
+            database,
+            endpoint,
+            cache_path,
+        };
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201AG".into(),
         });
-        let err = offset_handler.get_offsets(request).await.unwrap_err();
+        let err = server.get_offsets(request).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "Bad hex digit");
     }
 
     #[tokio::test]
+    #[serial]
     async fn not_found() {
         let database = Mutex::new(OffsetsDatabase::default());
-        let offset_handler = OffsetHandler { database };
+        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
+        let cache_path = "cache.json".into();
+        let server = Server {
+            database,
+            endpoint,
+            cache_path,
+        };
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A2".into(),
         });
-        let err = offset_handler.get_offsets(request).await.unwrap_err();
-        println!("Err: {:?}", err);
+        let err = server.get_offsets(request).await.unwrap_err();
+        assert_eq!(err.message(), "PDB hash not found");
     }
 
     #[tokio::test]
+    #[serial]
     async fn good_fetch() {
         let database = Mutex::new(OffsetsDatabase::default());
-        let offset_handler = OffsetHandler { database };
+        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
+        let cache_path = "cache.json".into();
+        let server = Server {
+            database,
+            endpoint,
+            cache_path,
+        };
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A1".into(),
         });
-        let response = offset_handler
-            .get_offsets(request)
-            .await
-            .unwrap()
-            .into_inner();
+        let response = server.get_offsets(request).await.unwrap().into_inner();
         // ensure it was cached
-        assert!(offset_handler
+        assert!(server
             .database
             .lock()
             .await
@@ -256,6 +285,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[serial]
     async fn good_cache() {
         let database = Mutex::new(OffsetsDatabase {
             offsets: hashmap!("46F6F5C30E7147E46F2A953A5DAF201A1".into() => Offsets{
@@ -263,15 +293,17 @@ mod test {
             ldrp_unload_node: 2
             }),
         });
-        let offset_handler = OffsetHandler { database };
+        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
+        let cache_path = "cache.json".into();
+        let server = Server {
+            database,
+            endpoint,
+            cache_path,
+        };
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A1".into(),
         });
-        let response = offset_handler
-            .get_offsets(request)
-            .await
-            .unwrap()
-            .into_inner();
+        let response = server.get_offsets(request).await.unwrap().into_inner();
         assert_eq!(response.ldrp_insert_module_to_index, 1);
         assert_eq!(response.ldrp_unload_node, 2);
     }

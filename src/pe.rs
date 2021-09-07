@@ -1,12 +1,4 @@
-pub mod offsets {
-    tonic::include_proto!("mmap");
-}
-
-use crate::{
-    error::{Err, Error},
-    map::MappedFile,
-    primitives::{protected_write, ProtectionGuard},
-};
+use crate::{error::{Err, Error}, map::MappedFile, offsets::{offset_client::OffsetClient, OffsetsRequest}, primitives::{protected_write, ProtectionGuard}, util::to_wide};
 use anyhow::Result;
 use lazy_static::lazy_static;
 use log::debug;
@@ -17,10 +9,8 @@ use ntapi::{
     },
     ntrtl::RtlInitUnicodeString,
 };
-use offsets::{offset_client::OffsetClient, OffsetsRequest};
 use std::{
     ffi::{c_void, CStr},
-    os::windows::prelude::OsStrExt,
     path::{Path, PathBuf},
     ptr::null_mut,
 };
@@ -45,24 +35,15 @@ use winapi::{
     },
 };
 
-pub struct PortableExecutable<'a> {
-    file: MappedFile,
-    file_name: PathBuf,
-    file_path: PathBuf,
-    nt_headers: &'a IMAGE_NT_HEADERS64,
-    section_headers: &'a [IMAGE_SECTION_HEADER],
-    entry_point: PLDR_INIT_ROUTINE,
-    section_protections: Vec<ProtectionGuard>,
-    loader_entry: LDR_DATA_TABLE_ENTRY,
-    ddag_node: LDR_DDAG_NODE,
-}
-
 #[allow(non_snake_case)]
 struct NtFunctions {
     LdrpInsertModuleToIndex: unsafe fn(
         pTblEntry: *const LDR_DATA_TABLE_ENTRY,
         pNtHeaders: *const IMAGE_NT_HEADERS64,
     ) -> u32,
+    LdrpUnloadNode: unsafe fn(
+        pDdagNode: *const LDR_DDAG_NODE
+    )
 }
 
 impl NtFunctions {
@@ -125,16 +106,12 @@ impl NtFunctions {
                 LdrpInsertModuleToIndex: std::mem::transmute(
                     ntdll.offset(response.ldrp_insert_module_to_index as isize),
                 ),
+                LdrpUnloadNode: std::mem::transmute(
+                    ntdll.offset(response.ldrp_unload_node as isize)
+                )
             })
         }
     }
-}
-
-fn to_wide(string: &str) -> Vec<u16> {
-    string
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<u16>>()
 }
 
 #[allow(non_camel_case_types)]
@@ -150,6 +127,18 @@ lazy_static! {
         tokio::runtime::Runtime::new()?.block_on(NtFunctions::resolve());
 }
 
+pub struct PortableExecutable<'a> {
+    file: MappedFile,
+    file_name: PathBuf,
+    file_path: PathBuf,
+    nt_headers: &'a IMAGE_NT_HEADERS64,
+    section_headers: &'a [IMAGE_SECTION_HEADER],
+    entry_point: PLDR_INIT_ROUTINE,
+    section_protections: Vec<ProtectionGuard>,
+    loader_entry: LDR_DATA_TABLE_ENTRY,
+    ddag_node: LDR_DDAG_NODE,
+}
+
 impl<'a> PortableExecutable<'a> {
     /// Initializes the loader entry
     fn init_ldr_entry(&mut self, nt_headers: &IMAGE_NT_HEADERS64) -> Result<()> {
@@ -158,25 +147,23 @@ impl<'a> PortableExecutable<'a> {
         unsafe {
             RtlInitUnicodeString(
                 &mut self.loader_entry.BaseDllName,
-                self.file_name
-                    .as_os_str()
-                    .encode_wide()
-                    .collect::<Vec<u16>>()
+                to_wide(&self.file_name
+                    .to_string_lossy())
                     .as_ptr(),
             );
             RtlInitUnicodeString(
                 &mut self.loader_entry.FullDllName,
-                self.file_path
-                    .as_os_str()
-                    .encode_wide()
-                    .collect::<Vec<u16>>()
+                to_wide(&self.file_path
+                    .to_string_lossy())
                     .as_ptr(),
             );
         }
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         unsafe {
-            ((*FUNCS).as_ref().unwrap().LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers)
+            if ((*FUNCS).as_ref().unwrap().LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers) == 0 {
+                return Err(Error(Err::LdrEntry).into())
+            }
         };
         Ok(())
     }
@@ -459,6 +446,13 @@ impl<'a> PortableExecutable<'a> {
         } else {
             PAGE_READONLY
         }
+    }
+}
+
+impl<'a> Drop for PortableExecutable<'a> {
+    // unload the loader entry. this is used for GetModuleHandle
+    fn drop(&mut self) {
+        unsafe { ((*FUNCS).as_ref().unwrap().LdrpUnloadNode)(self.loader_entry.DdagNode) }
     }
 }
 

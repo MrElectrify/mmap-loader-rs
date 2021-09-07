@@ -1,33 +1,20 @@
-pub mod offsets {
-    tonic::include_proto!("mmap");
-}
-
+mod db;
+mod offsets;
+use crate::db::{
+    Offsets, OffsetsDatabase
+};
 use offsets::{
     offset_server::{Offset, OffsetServer},
     {OffsetsRequest, OffsetsResponse},
 };
 use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
-use serde_derive::{Deserialize, Serialize};
 use std::{borrow::Cow, collections::HashMap, env, io::Cursor, net::SocketAddr};
 use tokio::{
     fs::{read_to_string, write},
     sync::Mutex,
 };
 use tonic::{transport::Server, Request, Response, Status};
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-struct Offsets {
-    ldrp_insert_data_table_entry: u32,
-    ldrp_insert_module_to_index: u32,
-    ldrp_handle_tls_data: u32,
-    rtl_insert_inverted_function_table: u32,
-}
-
-#[derive(Serialize, Default, Deserialize, Debug)]
-struct OffsetsDatabase {
-    offsets: HashMap<String, Offsets>,
-}
 
 #[derive(Debug)]
 struct OffsetHandler {
@@ -63,15 +50,11 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
             _ => Ok(None),
         })
         .collect()?;
-    let ldrp_insert_data_table_entry = *get_offset!(map, "LdrpInsertDataTableEntry");
     let ldrp_insert_module_to_index = *get_offset!(map, "LdrpInsertModuleToIndex");
-    let ldrp_handle_tls_data = *get_offset!(map, "LdrpHandleTlsData");
-    let rtl_insert_inverted_function_table = *get_offset!(map, "RtlInsertInvertedFunctionTable");
+    let ldrp_unload_node = *get_offset!(map, "LdrpUnloadNode");
     Ok(Some(Offsets {
-        ldrp_insert_data_table_entry,
         ldrp_insert_module_to_index,
-        ldrp_handle_tls_data,
-        rtl_insert_inverted_function_table,
+        ldrp_unload_node
     }))
 }
 
@@ -94,12 +77,7 @@ impl Offset for OffsetHandler {
         let offsets_map = &mut database.offsets;
         // see if it is in cache already
         if let Some(offsets) = offsets_map.get(&hash) {
-            return Ok(Response::new(OffsetsResponse {
-                ldrp_insert_data_table_entry: offsets.ldrp_insert_data_table_entry,
-                ldrp_insert_module_to_index: offsets.ldrp_insert_module_to_index,
-                ldrp_handle_tls_data: offsets.ldrp_handle_tls_data,
-                rtl_insert_inverted_function_table: offsets.rtl_insert_inverted_function_table,
-            }));
+            return Ok(Response::new(offsets.into()));
         }
         // download the PDB
         let pdb = match reqwest::get(format!(
@@ -151,14 +129,8 @@ impl Offset for OffsetHandler {
                 return Err(Status::internal("Failed to find some functions"));
             }
         };
-        let response = OffsetsResponse {
-            ldrp_insert_data_table_entry: offsets.ldrp_insert_data_table_entry,
-            ldrp_insert_module_to_index: offsets.ldrp_insert_module_to_index,
-            ldrp_handle_tls_data: offsets.ldrp_handle_tls_data,
-            rtl_insert_inverted_function_table: offsets.rtl_insert_inverted_function_table,
-        };
         // cache the lookup
-        offsets_map.insert(hash, offsets.clone());
+        offsets_map.insert(hash, offsets);
         // serialize the database
         let s = match serde_json::to_string::<OffsetsDatabase>(&*database) {
             Ok(s) => s,
@@ -168,7 +140,7 @@ impl Offset for OffsetHandler {
                     e.to_string(),
                     database
                 );
-                return Ok(Response::new(response));
+                return Ok(Response::new(offsets.into()));
             }
         };
         match write("db.json", &s).await {
@@ -181,7 +153,7 @@ impl Offset for OffsetHandler {
                 )
             }
         }
-        Ok(Response::new(response))
+        Ok(Response::new(offsets.into()))
     }
 }
 
@@ -278,20 +250,16 @@ mod test {
             .await
             .offsets
             .contains_key("46F6F5C30E7147E46F2A953A5DAF201A1"));
-        assert_eq!(response.ldrp_insert_data_table_entry, 0x14620);
         assert_eq!(response.ldrp_insert_module_to_index, 0x7FD40);
-        assert_eq!(response.ldrp_handle_tls_data, 0x47C14);
-        assert_eq!(response.rtl_insert_inverted_function_table, 0x108F0);
+        assert_eq!(response.ldrp_unload_node, 0x6A3E8);
     }
 
     #[tokio::test]
     async fn good_cache() {
         let database = Mutex::new(OffsetsDatabase {
             offsets: hashmap!("46F6F5C30E7147E46F2A953A5DAF201A1".into() => Offsets{
-            ldrp_insert_data_table_entry: 1,
-            ldrp_insert_module_to_index: 2,
-            ldrp_handle_tls_data: 3,
-            rtl_insert_inverted_function_table: 4,
+            ldrp_insert_module_to_index: 1,
+            ldrp_unload_node: 2
             }),
         });
         let offset_handler = OffsetHandler { database };
@@ -303,9 +271,7 @@ mod test {
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(response.ldrp_insert_data_table_entry, 1);
-        assert_eq!(response.ldrp_insert_module_to_index, 2);
-        assert_eq!(response.ldrp_handle_tls_data, 3);
-        assert_eq!(response.rtl_insert_inverted_function_table, 4);
+        assert_eq!(response.ldrp_insert_module_to_index, 1);
+        assert_eq!(response.ldrp_unload_node, 2);
     }
 }

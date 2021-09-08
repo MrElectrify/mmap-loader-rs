@@ -6,7 +6,6 @@ use crate::{
     util::to_wide,
 };
 use anyhow::Result;
-use lazy_static::lazy_static;
 use log::debug;
 use ntapi::{
     ntldr::{
@@ -42,12 +41,15 @@ use winapi::{
 };
 
 #[allow(non_snake_case)]
-struct NtFunctions {
+pub struct NtFunctions {
     LdrpInsertModuleToIndex: unsafe fn(
         pTblEntry: *const LDR_DATA_TABLE_ENTRY,
         pNtHeaders: *const IMAGE_NT_HEADERS64,
     ) -> u32,
-    LdrpUnloadNode: unsafe fn(pDdagNode: *const LDR_DDAG_NODE),
+    LdrpDecrementModuleLoadCountEx: unsafe fn(
+        pTblEntry: *const LDR_DATA_TABLE_ENTRY,
+        allow_unloaded: bool
+    ),
 }
 
 impl NtFunctions {
@@ -98,8 +100,17 @@ impl NtFunctions {
     }
 
     /// Resolves the functions used by the mapper
-    async fn resolve() -> Result<NtFunctions, anyhow::Error> {
-        let mut client = OffsetClient::connect("http://localhost:42220").await?;
+    ///
+    /// # Arguments
+    ///
+    /// `server_hostname`: The hostname of the endpoint of the PDB server
+    /// `server_port`: The port of the endpoint of the PDB server
+    pub async fn resolve(
+        server_hostname: &str,
+        server_port: u16,
+    ) -> Result<NtFunctions, anyhow::Error> {
+        let mut client =
+            OffsetClient::connect(format!("http://{}:{}", server_hostname, server_port)).await?;
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
         let request = tonic::Request::new(OffsetsRequest {
             ntdll_hash: NtFunctions::get_ntdll_hash(ntdll)?,
@@ -110,8 +121,8 @@ impl NtFunctions {
                 LdrpInsertModuleToIndex: std::mem::transmute(
                     ntdll.offset(response.ldrp_insert_module_to_index as isize),
                 ),
-                LdrpUnloadNode: std::mem::transmute(
-                    ntdll.offset(response.ldrp_unload_node as isize),
+                LdrpDecrementModuleLoadCountEx: std::mem::transmute(
+                    ntdll.offset(response.ldrp_decrement_module_load_count_ex as isize),
                 ),
             })
         }
@@ -126,11 +137,6 @@ struct IMAGE_DEBUG_CODEVIEW {
     age: u32,
 }
 
-lazy_static! {
-    static ref FUNCS: Result<NtFunctions, anyhow::Error> =
-        tokio::runtime::Runtime::new()?.block_on(NtFunctions::resolve());
-}
-
 pub struct PortableExecutable<'a> {
     file: MappedFile,
     file_name: PathBuf,
@@ -141,6 +147,8 @@ pub struct PortableExecutable<'a> {
     section_protections: Vec<ProtectionGuard>,
     loader_entry: LDR_DATA_TABLE_ENTRY,
     ddag_node: LDR_DDAG_NODE,
+    functions: &'a NtFunctions,
+    ldr_entry_init: bool,
 }
 
 impl<'a> PortableExecutable<'a> {
@@ -161,9 +169,7 @@ impl<'a> PortableExecutable<'a> {
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         unsafe {
-            if ((*FUNCS).as_ref().unwrap().LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers)
-                == 0
-            {
+            if (self.functions.LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers) == 0 {
                 return Err(Error(Err::LdrEntry).into());
             }
         };
@@ -175,8 +181,9 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `path`: The path to the executable file
-    pub fn load(path: &str) -> Result<PortableExecutable> {
-        // first make sure we have
+    /// `functions`: The resolved Nt Functions
+    pub fn load(path: &str, functions: &'a NtFunctions) -> Result<PortableExecutable<'a>> {
+        // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
         let file_name = path.file_name().ok_or(Error(Err::FileNotFound))?;
@@ -244,11 +251,14 @@ impl<'a> PortableExecutable<'a> {
                 CondenseLink: SINGLE_LIST_ENTRY::default(),
                 PreorderNumber: 0,
             },
+            functions,
+            ldr_entry_init: false,
         };
         pe.resolve_imports()?;
         pe.init_ldr_entry(nt_headers)?;
         // protect last
         pe.protect_sections()?;
+        pe.ldr_entry_init = true;
         Ok(pe)
     }
 
@@ -455,22 +465,55 @@ impl<'a> PortableExecutable<'a> {
 impl<'a> Drop for PortableExecutable<'a> {
     // unload the loader entry. this is used for GetModuleHandle
     fn drop(&mut self) {
-        unsafe { ((*FUNCS).as_ref().unwrap().LdrpUnloadNode)(self.loader_entry.DdagNode) }
+        if self.ldr_entry_init {
+            unsafe { (self.functions.LdrpDecrementModuleLoadCountEx)(&self.loader_entry, false) }
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::server::Server;
+    use lazy_static::lazy_static;
     use serial_test::serial;
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr},
+        sync::Once,
+        thread,
+    };
+    use tokio::runtime::Runtime;
     use winapi::shared::winerror::{
         ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND,
     };
 
+    static INIT: Once = Once::new();
+
+    lazy_static! {
+        static ref NT_FUNCTIONS: NtFunctions = Runtime::new()
+            .unwrap()
+            .block_on(NtFunctions::resolve("localhost", 42221))
+            .unwrap();
+    }
+
+    fn setup() {
+        INIT.call_once(|| {
+            let server = Server::new(
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 42221),
+                "test/cache.json".into(),
+            )
+            .unwrap();
+            thread::spawn(move || {
+                Runtime::new().unwrap().block_on(server.run()).unwrap();
+            });
+        });
+    }
+
     #[test]
     #[serial]
     fn bad_dos() {
-        let err: std::io::Error = PortableExecutable::load("test/baddos.exe")
+        setup();
+        let err: std::io::Error = PortableExecutable::load("test/baddos.exe", &NT_FUNCTIONS)
             .err()
             .unwrap()
             .downcast()
@@ -481,7 +524,8 @@ mod test {
     #[test]
     #[serial]
     fn bad_section() {
-        let err: std::io::Error = PortableExecutable::load("test/badsection.exe")
+        setup();
+        let err: std::io::Error = PortableExecutable::load("test/badsection.exe", &NT_FUNCTIONS)
             .err()
             .unwrap()
             .downcast()
@@ -492,7 +536,8 @@ mod test {
     #[test]
     #[serial]
     fn bad_entry() {
-        let err: Error = PortableExecutable::load("test/badentry.exe")
+        setup();
+        let err: Error = PortableExecutable::load("test/badentry.exe", &NT_FUNCTIONS)
             .err()
             .unwrap()
             .downcast()
@@ -503,7 +548,8 @@ mod test {
     #[test]
     #[serial]
     fn bad_mod() {
-        let err: std::io::Error = PortableExecutable::load("test/badmod.exe")
+        setup();
+        let err: std::io::Error = PortableExecutable::load("test/badmod.exe", &NT_FUNCTIONS)
             .err()
             .unwrap()
             .downcast()
@@ -514,7 +560,8 @@ mod test {
     #[test]
     #[serial]
     fn bad_proc() {
-        let err: std::io::Error = PortableExecutable::load("test/badproc.exe")
+        setup();
+        let err: std::io::Error = PortableExecutable::load("test/badproc.exe", &NT_FUNCTIONS)
             .err()
             .unwrap()
             .downcast()
@@ -522,24 +569,39 @@ mod test {
         assert_eq!(err.raw_os_error().unwrap(), ERROR_PROC_NOT_FOUND as i32);
     }
 
-    #[test]
-    #[serial]
-    fn basic_image() {
-        let image = PortableExecutable::load("test/basic.exe").unwrap();
-        unsafe {
-            assert_eq!(image.run().unwrap(), 23);
-        }
-    }
-
     // we only support x86-64/ARM64 for now
     #[test]
     #[serial]
-    fn x86_image() {
-        let err: Error = PortableExecutable::load("test/x86.exe")
+    fn bad_arch() {
+        setup();
+        let err: Error = PortableExecutable::load("test/x86.exe", &NT_FUNCTIONS)
             .err()
             .unwrap()
             .downcast()
             .unwrap();
         assert_eq!(err.0, Err::UnsupportedArch);
     }
+    
+    #[test]
+    #[serial]
+    fn basic_image() {
+        setup();
+        let image = PortableExecutable::load("test/basic.exe", &NT_FUNCTIONS).unwrap();
+        unsafe {
+            assert_eq!(image.run().unwrap(), 23);
+        }
+    }
+
+    /*#[test]
+    #[serial]
+    fn ldr_entry() {
+        setup();
+        {
+            let _ = PortableExecutable::load("test/basic.exe", &NT_FUNCTIONS).unwrap();
+            let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
+            assert!(!handle.is_null());
+        }
+        let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
+        assert!(handle.is_null());
+    }*/
 }

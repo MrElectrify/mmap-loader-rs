@@ -82,10 +82,10 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         })
         .collect()?;
     let ldrp_insert_module_to_index = *get_offset!(map, "LdrpInsertModuleToIndex");
-    let ldrp_unload_node = *get_offset!(map, "LdrpUnloadNode");
+    let ldrp_decrement_module_load_count_ex = *get_offset!(map, "LdrpDecrementModuleLoadCountEx");
     Ok(Some(Offsets {
         ldrp_insert_module_to_index,
-        ldrp_unload_node,
+        ldrp_decrement_module_load_count_ex,
     }))
 }
 
@@ -200,14 +200,12 @@ mod test {
     }
 
     use super::*;
-    use serial_test::serial;
 
     #[tokio::test]
-    #[serial]
     async fn hash_length() {
         let database = Mutex::new(OffsetsDatabase::default());
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "cache.json".into();
+        let cache_path = "test/cache.json".into();
         let server = Server {
             database,
             endpoint,
@@ -222,11 +220,10 @@ mod test {
     }
 
     #[tokio::test]
-    #[serial]
     async fn hash_digits() {
         let database = Mutex::new(OffsetsDatabase::default());
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "cache.json".into();
+        let cache_path = "test/cache.json".into();
         let server = Server {
             database,
             endpoint,
@@ -241,11 +238,10 @@ mod test {
     }
 
     #[tokio::test]
-    #[serial]
     async fn not_found() {
         let database = Mutex::new(OffsetsDatabase::default());
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "cache.json".into();
+        let cache_path = "test/cache.json".into();
         let server = Server {
             database,
             endpoint,
@@ -259,11 +255,10 @@ mod test {
     }
 
     #[tokio::test]
-    #[serial]
     async fn good_fetch() {
         let database = Mutex::new(OffsetsDatabase::default());
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "cache.json".into();
+        let cache_path = "test/cache.json".into();
         let server = Server {
             database,
             endpoint,
@@ -281,20 +276,19 @@ mod test {
             .offsets
             .contains_key("46F6F5C30E7147E46F2A953A5DAF201A1"));
         assert_eq!(response.ldrp_insert_module_to_index, 0x7FD40);
-        assert_eq!(response.ldrp_unload_node, 0x6A3E8);
+        assert_eq!(response.ldrp_decrement_module_load_count_ex, 0xFC98);
     }
 
     #[tokio::test]
-    #[serial]
     async fn good_cache() {
         let database = Mutex::new(OffsetsDatabase {
             offsets: hashmap!("46F6F5C30E7147E46F2A953A5DAF201A1".into() => Offsets{
             ldrp_insert_module_to_index: 1,
-            ldrp_unload_node: 2
+            ldrp_decrement_module_load_count_ex: 2
             }),
         });
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "cache.json".into();
+        let cache_path = "test/cache.json".into();
         let server = Server {
             database,
             endpoint,
@@ -305,6 +299,6 @@ mod test {
         });
         let response = server.get_offsets(request).await.unwrap().into_inner();
         assert_eq!(response.ldrp_insert_module_to_index, 1);
-        assert_eq!(response.ldrp_unload_node, 2);
+        assert_eq!(response.ldrp_decrement_module_load_count_ex, 2);
     }
 }

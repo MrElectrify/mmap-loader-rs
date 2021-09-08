@@ -2,4 +2,4 @@ src/main.rs
 .git/
 .vscode/
 target/
-cache.json
+test/cache.json

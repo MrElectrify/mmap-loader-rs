@@ -82,11 +82,11 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         })
         .collect()?;
     let ldrp_insert_module_to_index = *get_offset!(map, "LdrpInsertModuleToIndex");
-    let ldrp_decrement_module_load_count_ex = *get_offset!(map, "LdrpDecrementModuleLoadCountEx");
+    let ldrp_unload_node = *get_offset!(map, "LdrpUnloadNode");
     let ldrp_insert_data_table_entry = *get_offset!(map, "LdrpInsertDataTableEntry");
     Ok(Some(Offsets {
         ldrp_insert_module_to_index,
-        ldrp_decrement_module_load_count_ex,
+        ldrp_unload_node,
         ldrp_insert_data_table_entry,
     }))
 }
@@ -278,7 +278,7 @@ mod test {
             .offsets
             .contains_key("46F6F5C30E7147E46F2A953A5DAF201A1"));
         assert_eq!(response.ldrp_insert_module_to_index, 0x7FD40);
-        assert_eq!(response.ldrp_decrement_module_load_count_ex, 0xFC98);
+        assert_eq!(response.ldrp_unload_node, 0x6A3E8);
         assert_eq!(response.ldrp_insert_data_table_entry, 0x14620);
     }
 
@@ -287,7 +287,7 @@ mod test {
         let database = Mutex::new(OffsetsDatabase {
             offsets: hashmap!("46F6F5C30E7147E46F2A953A5DAF201A1".into() => Offsets{
             ldrp_insert_module_to_index: 1,
-            ldrp_decrement_module_load_count_ex: 2,
+            ldrp_unload_node: 2,
             ldrp_insert_data_table_entry: 3,
             }),
         });
@@ -303,7 +303,7 @@ mod test {
         });
         let response = server.get_offsets(request).await.unwrap().into_inner();
         assert_eq!(response.ldrp_insert_module_to_index, 1);
-        assert_eq!(response.ldrp_decrement_module_load_count_ex, 2);
+        assert_eq!(response.ldrp_unload_node, 2);
         assert_eq!(response.ldrp_insert_data_table_entry, 3);
     }
 }

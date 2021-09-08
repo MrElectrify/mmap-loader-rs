@@ -11,6 +11,6 @@ message OffsetsRequest {
 
 message OffsetsResponse {
     uint32 LdrpInsertModuleToIndex = 1; 
-    uint32 LdrpDecrementModuleLoadCountEx = 2;
+    uint32 LdrpUnloadNode = 2;
     uint32 LdrpInsertDataTableEntry = 3;
 }

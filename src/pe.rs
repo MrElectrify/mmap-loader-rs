@@ -17,6 +17,7 @@ use ntapi::{
 use std::{
     ffi::{c_void, CStr},
     path::Path,
+    pin::Pin,
     ptr::null_mut,
 };
 use winapi::{
@@ -43,12 +44,11 @@ use winapi::{
 #[allow(non_snake_case)]
 pub struct NtFunctions {
     LdrpInsertModuleToIndex: unsafe fn(
-        pTblEntry: *const LDR_DATA_TABLE_ENTRY,
-        pNtHeaders: *const IMAGE_NT_HEADERS64,
+        tbl_entry: *const LDR_DATA_TABLE_ENTRY,
+        nt_headers: *const IMAGE_NT_HEADERS64,
     ) -> u32,
-    LdrpDecrementModuleLoadCountEx:
-        unsafe fn(pTblEntry: *const LDR_DATA_TABLE_ENTRY, allow_unloaded: bool),
-    LdrpInsertDataTableEntry: unsafe fn(pTblEntry: *const LDR_DATA_TABLE_ENTRY),
+    LdrpUnloadNode: unsafe fn(ddag_node: *const LDR_DDAG_NODE),
+    LdrpInsertDataTableEntry: unsafe fn(tbl_entry: *const LDR_DATA_TABLE_ENTRY),
 }
 
 impl NtFunctions {
@@ -120,8 +120,8 @@ impl NtFunctions {
                 LdrpInsertModuleToIndex: std::mem::transmute(
                     ntdll.offset(response.ldrp_insert_module_to_index as isize),
                 ),
-                LdrpDecrementModuleLoadCountEx: std::mem::transmute(
-                    ntdll.offset(response.ldrp_decrement_module_load_count_ex as isize),
+                LdrpUnloadNode: std::mem::transmute(
+                    ntdll.offset(response.ldrp_unload_node as isize),
                 ),
                 LdrpInsertDataTableEntry: std::mem::transmute(
                     ntdll.offset(response.ldrp_insert_data_table_entry as isize),
@@ -147,8 +147,8 @@ pub struct PortableExecutable<'a> {
     section_headers: &'a [IMAGE_SECTION_HEADER],
     entry_point: PLDR_INIT_ROUTINE,
     section_protections: Vec<ProtectionGuard>,
-    loader_entry: LDR_DATA_TABLE_ENTRY,
-    ddag_node: LDR_DDAG_NODE,
+    loader_entry: Pin<Box<LDR_DATA_TABLE_ENTRY>>,
+    ddag_node: Pin<Box<LDR_DDAG_NODE>>,
     functions: &'a NtFunctions,
     ldr_entry_init: bool,
 }
@@ -157,7 +157,7 @@ impl<'a> PortableExecutable<'a> {
     /// Initializes the loader entry
     fn init_ldr_entry(&mut self, nt_headers: &IMAGE_NT_HEADERS64) -> Result<()> {
         self.loader_entry.DllBase = self.file.contents_mut();
-        self.loader_entry.DdagNode = &mut self.ddag_node;
+        self.loader_entry.DdagNode = self.ddag_node.as_mut().get_mut();
         unsafe {
             RtlInitUnicodeString(&mut self.loader_entry.BaseDllName, self.file_name.as_ptr());
             RtlInitUnicodeString(&mut self.loader_entry.FullDllName, self.file_path.as_ptr());
@@ -165,10 +165,14 @@ impl<'a> PortableExecutable<'a> {
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         unsafe {
-            if (self.functions.LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers) == 0 {
+            if (self.functions.LdrpInsertModuleToIndex)(
+                self.loader_entry.as_ref().get_ref(),
+                nt_headers,
+            ) == 0
+            {
                 return Err(Error(Err::LdrEntry).into());
             }
-            //(self.functions.LdrpInsertDataTableEntry)(&self.loader_entry);
+            (self.functions.LdrpInsertDataTableEntry)(self.loader_entry.as_ref().get_ref());
         };
         Ok(())
     }
@@ -200,7 +204,7 @@ impl<'a> PortableExecutable<'a> {
             section_headers,
             entry_point,
             section_protections: Vec::new(),
-            loader_entry: LDR_DATA_TABLE_ENTRY {
+            loader_entry: Box::pin(LDR_DATA_TABLE_ENTRY {
                 InLoadOrderLinks: LIST_ENTRY::default(),
                 InMemoryOrderLinks: LIST_ENTRY::default(),
                 u1: LDR_DATA_TABLE_ENTRY_u1 {
@@ -233,8 +237,8 @@ impl<'a> PortableExecutable<'a> {
                 ReferenceCount: 0,
                 DependentLoadFlags: 0,
                 SigningLevel: 0,
-            },
-            ddag_node: LDR_DDAG_NODE {
+            }),
+            ddag_node: Box::pin(LDR_DDAG_NODE {
                 Modules: LIST_ENTRY::default(),
                 ServiceTagList: null_mut(),
                 LoadCount: 0,
@@ -247,7 +251,7 @@ impl<'a> PortableExecutable<'a> {
                 State: LDR_DDAG_STATE::default(),
                 CondenseLink: SINGLE_LIST_ENTRY::default(),
                 PreorderNumber: 0,
-            },
+            }),
             functions,
             ldr_entry_init: false,
         };
@@ -463,7 +467,7 @@ impl<'a> Drop for PortableExecutable<'a> {
     // unload the loader entry. this is used for GetModuleHandle
     fn drop(&mut self) {
         if self.ldr_entry_init {
-            unsafe { (self.functions.LdrpDecrementModuleLoadCountEx)(&self.loader_entry, false) }
+           // unsafe { (self.functions.LdrpUnloadNode)(self.ddag_node.as_ref().get_ref()) }
         }
     }
 }
@@ -594,7 +598,7 @@ mod test {
     fn ldr_entry() {
         setup();
         {
-            let _ = PortableExecutable::load("test/basic.exe", &NT_FUNCTIONS).unwrap();
+            let _image = PortableExecutable::load("test/basic.exe", &NT_FUNCTIONS).unwrap();
             let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
             assert!(!handle.is_null());
         }

@@ -46,10 +46,8 @@ pub struct NtFunctions {
         pTblEntry: *const LDR_DATA_TABLE_ENTRY,
         pNtHeaders: *const IMAGE_NT_HEADERS64,
     ) -> u32,
-    LdrpDecrementModuleLoadCountEx: unsafe fn(
-        pTblEntry: *const LDR_DATA_TABLE_ENTRY,
-        allow_unloaded: bool
-    ),
+    LdrpDecrementModuleLoadCountEx:
+        unsafe fn(pTblEntry: *const LDR_DATA_TABLE_ENTRY, allow_unloaded: bool),
 }
 
 impl NtFunctions {
@@ -581,7 +579,7 @@ mod test {
             .unwrap();
         assert_eq!(err.0, Err::UnsupportedArch);
     }
-    
+
     #[test]
     #[serial]
     fn basic_image() {

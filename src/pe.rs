@@ -16,7 +16,7 @@ use ntapi::{
 };
 use std::{
     ffi::{c_void, CStr},
-    path::{Path, PathBuf},
+    path::Path,
     ptr::null_mut,
 };
 use winapi::{
@@ -48,6 +48,7 @@ pub struct NtFunctions {
     ) -> u32,
     LdrpDecrementModuleLoadCountEx:
         unsafe fn(pTblEntry: *const LDR_DATA_TABLE_ENTRY, allow_unloaded: bool),
+    LdrpInsertDataTableEntry: unsafe fn(pTblEntry: *const LDR_DATA_TABLE_ENTRY),
 }
 
 impl NtFunctions {
@@ -122,6 +123,9 @@ impl NtFunctions {
                 LdrpDecrementModuleLoadCountEx: std::mem::transmute(
                     ntdll.offset(response.ldrp_decrement_module_load_count_ex as isize),
                 ),
+                LdrpInsertDataTableEntry: std::mem::transmute(
+                    ntdll.offset(response.ldrp_insert_data_table_entry as isize),
+                ),
             })
         }
     }
@@ -137,8 +141,8 @@ struct IMAGE_DEBUG_CODEVIEW {
 
 pub struct PortableExecutable<'a> {
     file: MappedFile,
-    file_name: PathBuf,
-    file_path: PathBuf,
+    file_name: Vec<u16>,
+    file_path: Vec<u16>,
     nt_headers: &'a IMAGE_NT_HEADERS64,
     section_headers: &'a [IMAGE_SECTION_HEADER],
     entry_point: PLDR_INIT_ROUTINE,
@@ -155,14 +159,8 @@ impl<'a> PortableExecutable<'a> {
         self.loader_entry.DllBase = self.file.contents_mut();
         self.loader_entry.DdagNode = &mut self.ddag_node;
         unsafe {
-            RtlInitUnicodeString(
-                &mut self.loader_entry.BaseDllName,
-                to_wide(&self.file_name.to_string_lossy()).as_ptr(),
-            );
-            RtlInitUnicodeString(
-                &mut self.loader_entry.FullDllName,
-                to_wide(&self.file_path.to_string_lossy()).as_ptr(),
-            );
+            RtlInitUnicodeString(&mut self.loader_entry.BaseDllName, self.file_name.as_ptr());
+            RtlInitUnicodeString(&mut self.loader_entry.FullDllName, self.file_path.as_ptr());
         }
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
@@ -170,6 +168,7 @@ impl<'a> PortableExecutable<'a> {
             if (self.functions.LdrpInsertModuleToIndex)(&self.loader_entry, nt_headers) == 0 {
                 return Err(Error(Err::LdrEntry).into());
             }
+            //(self.functions.LdrpInsertDataTableEntry)(&self.loader_entry);
         };
         Ok(())
     }
@@ -195,8 +194,8 @@ impl<'a> PortableExecutable<'a> {
         let entry_point = PortableExecutable::load_entry_point(&mut file, nt_headers)?;
         let mut pe = PortableExecutable {
             file,
-            file_name: file_name.into(),
-            file_path,
+            file_name: to_wide(&file_name.to_string_lossy()),
+            file_path: to_wide(&file_path.to_string_lossy()),
             nt_headers,
             section_headers,
             entry_point,
@@ -590,7 +589,7 @@ mod test {
         }
     }
 
-    /*#[test]
+    #[test]
     #[serial]
     fn ldr_entry() {
         setup();
@@ -601,5 +600,5 @@ mod test {
         }
         let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
         assert!(handle.is_null());
-    }*/
+    }
 }

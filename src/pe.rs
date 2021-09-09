@@ -10,7 +10,7 @@ use log::debug;
 use ntapi::{ntldr::{
         LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
         LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DDAG_NODE, LDR_DDAG_STATE, PLDR_INIT_ROUTINE,
-    }, ntrtl::{HASH_STRING_ALGORITHM_DEFAULT, InsertTailList, RtlHashUnicodeString, RtlInitUnicodeString}};
+    }, ntrtl::{HASH_STRING_ALGORITHM_DEFAULT, InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlInitUnicodeString}};
 use std::{
     ffi::{c_void, CStr},
     path::Path,
@@ -468,6 +468,20 @@ impl<'a> Drop for PortableExecutable<'a> {
     fn drop(&mut self) {
         if self.ldr_entry_init {
             // remove hash table and linked list entries
+            let mut hash_table = self.context.LdrpHashTable.lock();
+            // find our entry
+            let first_entry = &mut hash_table[(self.loader_entry.BaseNameHashValue & 0x1f) as usize];
+            let mut entry = first_entry.Flink;
+            // if the next entry is the first one, we are done
+            while entry as *const LIST_ENTRY != first_entry {
+                if entry as *const _ == &self.loader_entry.HashLinks as *const _ {
+                    // remove the entry
+                    unsafe { RemoveEntryList(entry.as_mut().unwrap()); }
+                    return;
+                }
+                entry = unsafe { (*entry).Flink };
+            }
+            debug!("Failed to find reference");
         }
     }
 }

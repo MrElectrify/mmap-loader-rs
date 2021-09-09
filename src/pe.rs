@@ -28,7 +28,7 @@ use winapi::{
     shared::{
         guiddef::GUID,
         ntdef::{
-            BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
+            LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
             UNICODE_STRING,
         },
         ntstatus::STATUS_SUCCESS,
@@ -195,6 +195,19 @@ impl<'a> PortableExecutable<'a> {
         Ok(())
     }
 
+    /// Calls the function entry point
+    ///
+    /// # Arguments
+    ///
+    /// `reason`: The reason for the call. Ex: `DLL_PROCESS_ATTACH`
+    fn call_entry_point(&mut self, reason: u32) -> u8 {
+        if let Some(entry_point) = &self.entry_point {
+            unsafe { entry_point(self.file.contents_mut(), reason, null_mut()) }
+        } else {
+            0
+        }
+    }
+
     /// Enables exception handling for the module
     fn enable_exceptions(&mut self) -> Result<()> {
         // get the exception table
@@ -230,6 +243,10 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Execute TLS callbacks
+    ///
+    /// # Arguments
+    ///
+    /// `reason`: The reason for the call to the callbacks
     fn execute_tls_callbacks(&mut self, reason: u32) -> Result<()> {
         let tls_directory =
             &self.nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS as usize];
@@ -424,12 +441,15 @@ impl<'a> PortableExecutable<'a> {
         file: &mut MappedFile,
         nt_headers: &IMAGE_NT_HEADERS64,
     ) -> Result<PLDR_INIT_ROUTINE> {
+        let address_of_ep = nt_headers.OptionalHeader.AddressOfEntryPoint;
+        if address_of_ep == 0 {
+            // PEs can sometimes not have entry points
+            return Ok(None);
+        }
         unsafe {
-            // resolve the entry point
             // we transmute here because I have no earthly idea how to return a generic function
             let entry_point: PLDR_INIT_ROUTINE = std::mem::transmute(
-                file.get_rva::<u8>(nt_headers.OptionalHeader.AddressOfEntryPoint as isize)
-                    .ok_or(Error(Err::EPOutOfBounds))?,
+                file.get_rva::<u8>(address_of_ep as isize).ok_or(Error(Err::EPOutOfBounds))?,
             );
             Ok(entry_point)
         }
@@ -591,12 +611,8 @@ impl<'a> PortableExecutable<'a> {
     ///
     /// The safety of this function is entirely dependent on whether or not
     /// the underlying executable is safe
-    pub unsafe fn run(mut self) -> Result<BOOLEAN> {
-        Ok((self.entry_point.unwrap())(
-            self.file.contents_mut(),
-            DLL_PROCESS_ATTACH,
-            null_mut(),
-        ))
+    pub unsafe fn run(mut self) -> u8 {
+        self.call_entry_point(DLL_PROCESS_ATTACH)
     }
 
     /// Converts section flags to page protection flags
@@ -622,6 +638,8 @@ impl<'a> Drop for PortableExecutable<'a> {
         if let Err(e) = self.execute_tls_callbacks(DLL_PROCESS_DETACH) {
             error!("Failed to execute TLS callbacks on exit: {}", e.to_string())
         };
+        // call the entry point with detach
+        self.call_entry_point(DLL_PROCESS_DETACH);
         // disable exceptions afterwards in case a TLS callback uses them
         if let Err(e) = self.disable_exceptions() {
             error!("Failed to disable exceptions: {}", e.to_string())
@@ -752,7 +770,7 @@ mod test {
         setup();
         let image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
         unsafe {
-            assert_eq!(image.run().unwrap(), 23);
+            assert_eq!(image.run(), 23);
         }
     }
 
@@ -775,7 +793,7 @@ mod test {
         setup();
         let image = PortableExecutable::load("test/tls.exe", &NT_CONTEXT).unwrap();
         unsafe {
-            assert_eq!(image.run().unwrap(), 7);
+            assert_eq!(image.run(), 7);
         }
     }
 }

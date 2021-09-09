@@ -1,13 +1,18 @@
-use std::ffi::c_void;
+use std::{
+    cell::UnsafeCell,
+    ffi::c_void,
+    ops::{Deref, DerefMut},
+};
 
 use anyhow::Result;
 
+use ntapi::ntrtl::{RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive};
 use winapi::{
-    shared::minwindef::DWORD,
+    shared::{minwindef::DWORD, ntdef::LIST_ENTRY},
     um::{
         handleapi::CloseHandle,
         memoryapi::VirtualProtect,
-        winnt::{HANDLE, PAGE_READWRITE},
+        winnt::{HANDLE, PAGE_READWRITE, RTL_SRWLOCK},
     },
 };
 
@@ -15,6 +20,48 @@ use winapi::{
 #[derive(Debug)]
 pub struct Handle {
     pub handle: HANDLE,
+}
+
+/// Protects a region of memory for the lifetime of the object
+pub struct ProtectionGuard {
+    addr: *mut c_void,
+    size: usize,
+    old_prot: DWORD,
+}
+
+/// A very simple, compact hash table that is used as RtlHashTable
+pub struct RtlHashTable<'a> {
+    pub buckets: &'a mut [LIST_ENTRY; 32],
+}
+
+/// A mutex based on an RTL Slim Read/Write lock
+pub struct RtlMutex<'a, T> {
+    val_ref: UnsafeCell<&'a mut T>,
+    lock_ref: UnsafeCell<&'a mut RTL_SRWLOCK>,
+}
+
+/// A mutex guard that allows access to the value, and locks it upon `Drop`
+pub struct RtlMutexGuard<'a, T> {
+    mutex: &'a RtlMutex<'a, T>,
+}
+
+/// Writes to protected memory, enforcing a new protection for
+/// the duration of the write
+///
+/// # Arguments
+///
+/// `addr`: The address to write to
+/// `val`: The value to write
+pub unsafe fn protected_write<T>(addr: *mut T, val: T) -> Result<()> {
+    // protect the value first with READWRITE
+    let _prot_guard = ProtectionGuard::new(
+        addr as *mut c_void,
+        std::mem::size_of_val(&val),
+        PAGE_READWRITE,
+    )?;
+    // write the value
+    *addr = val;
+    Ok(())
 }
 
 impl Handle {
@@ -43,13 +90,6 @@ impl Drop for Handle {
             CloseHandle(self.handle);
         }
     }
-}
-
-/// Protects a region of memory for the lifetime of the object
-pub struct ProtectionGuard {
-    addr: *mut c_void,
-    size: usize,
-    old_prot: DWORD,
 }
 
 impl ProtectionGuard {
@@ -84,21 +124,59 @@ impl Drop for ProtectionGuard {
     }
 }
 
-/// Writes to protected memory, enforcing a new protection for
-/// the duration of the write
-///
-/// # Arguments
-///
-/// `addr`: The address to write to
-/// `val`: The value to write
-pub unsafe fn protected_write<T>(addr: *mut T, val: T) -> Result<()> {
-    // protect the value first with READWRITE
-    let _prot_guard = ProtectionGuard::new(
-        addr as *mut c_void,
-        std::mem::size_of_val(&val),
-        PAGE_READWRITE,
-    )?;
-    // write the value
-    *addr = val;
-    Ok(())
+impl<'a> RtlHashTable<'a> {
+    /// Creates an Rtl hash table from the buckets
+    ///
+    /// # Arguments
+    ///
+    /// `buckets`: The hash table buckets
+    pub fn from_ref(buckets: &'a mut [LIST_ENTRY; 32]) -> RtlHashTable<'a> {
+        RtlHashTable { buckets }
+    }
+}
+
+impl<'a, T> RtlMutex<'a, T> {
+    /// Locks the mutex and allows for access of the variable
+    pub fn lock(&'a self) -> RtlMutexGuard<'a, T> {
+        unsafe {
+            RtlTryAcquireSRWLockExclusive(*self.lock_ref.get());
+        }
+        RtlMutexGuard { mutex: &self }
+    }
+
+    /// Creates a new mutex wrapped around a Rtl Slim Read/Write lock
+    ///
+    /// # Arguments
+    ///
+    /// `val_ref`: The reference to the value protected by the lock
+    /// `lock`: The lock
+    pub fn from_ref(val_ref: &'a mut T, lock_ref: &'a mut RTL_SRWLOCK) -> RtlMutex<'a, T> {
+        RtlMutex {
+            val_ref: UnsafeCell::new(val_ref),
+            lock_ref: UnsafeCell::new(lock_ref),
+        }
+    }
+}
+
+unsafe impl<'a, T> Send for RtlMutex<'a, T> {}
+unsafe impl<'a, T> Sync for RtlMutex<'a, T> {}
+
+impl<'a, T> Deref for RtlMutexGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { *self.mutex.val_ref.get() }
+    }
+}
+
+impl<'a, T> DerefMut for RtlMutexGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { *self.mutex.val_ref.get() }
+    }
+}
+
+impl<'a, T> Drop for RtlMutexGuard<'a, T> {
+    fn drop(&mut self) {
+        unsafe { RtlReleaseSRWLockExclusive(*self.mutex.lock_ref.get()) }
+    }
 }

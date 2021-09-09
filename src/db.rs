@@ -4,17 +4,15 @@ use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct Offsets {
-    pub ldrp_insert_module_to_index: u32,
-    pub ldrp_unload_node: u32,
-    pub ldrp_insert_data_table_entry: u32,
+    pub ldrp_hash_table: u32,
+    pub ldrp_module_datatable_lock: u32,
 }
 
 impl From<offsets::OffsetsResponse> for Offsets {
     fn from(off: offsets::OffsetsResponse) -> Offsets {
         Offsets {
-            ldrp_insert_module_to_index: off.ldrp_insert_module_to_index,
-            ldrp_unload_node: off.ldrp_unload_node,
-            ldrp_insert_data_table_entry: off.ldrp_insert_data_table_entry,
+            ldrp_hash_table: off.ldrp_hash_table,
+            ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
         }
     }
 }
@@ -22,9 +20,8 @@ impl From<offsets::OffsetsResponse> for Offsets {
 impl From<&Offsets> for offsets::OffsetsResponse {
     fn from(off: &Offsets) -> offsets::OffsetsResponse {
         offsets::OffsetsResponse {
-            ldrp_insert_module_to_index: off.ldrp_insert_module_to_index,
-            ldrp_unload_node: off.ldrp_unload_node,
-            ldrp_insert_data_table_entry: off.ldrp_insert_data_table_entry,
+            ldrp_hash_table: off.ldrp_hash_table,
+            ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
         }
     }
 }
@@ -32,9 +29,8 @@ impl From<&Offsets> for offsets::OffsetsResponse {
 impl From<Offsets> for offsets::OffsetsResponse {
     fn from(off: Offsets) -> offsets::OffsetsResponse {
         offsets::OffsetsResponse {
-            ldrp_insert_module_to_index: off.ldrp_insert_module_to_index,
-            ldrp_unload_node: off.ldrp_unload_node,
-            ldrp_insert_data_table_entry: off.ldrp_insert_data_table_entry,
+            ldrp_hash_table: off.ldrp_hash_table,
+            ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
         }
     }
 }

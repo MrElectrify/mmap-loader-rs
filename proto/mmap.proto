@@ -10,7 +10,6 @@ message OffsetsRequest {
 }
 
 message OffsetsResponse {
-    uint32 LdrpInsertModuleToIndex = 1; 
-    uint32 LdrpUnloadNode = 2;
-    uint32 LdrpInsertDataTableEntry = 3;
+    uint32 LdrpHashTable = 1;
+    uint32 LdrpModuleDatatableLock = 2; 
 }

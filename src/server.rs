@@ -73,7 +73,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         .iter()
         .map(|sym| sym.parse())
         .filter_map(|data| match data {
-            SymbolData::Public(proc) if proc.function => Ok(Some(proc)),
+            SymbolData::Public(proc) if proc.code => Ok(Some(proc)),
             _ => Ok(None),
         })
         .filter_map(|proc| match proc.offset.to_rva(&address_map) {
@@ -81,13 +81,11 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
             _ => Ok(None),
         })
         .collect()?;
-    let ldrp_insert_module_to_index = *get_offset!(map, "LdrpInsertModuleToIndex");
-    let ldrp_unload_node = *get_offset!(map, "LdrpUnloadNode");
-    let ldrp_insert_data_table_entry = *get_offset!(map, "LdrpInsertDataTableEntry");
+    let ldrp_hash_table = *get_offset!(map, "LdrpHashTable");
+    let ldrp_module_datatable_lock = *get_offset!(map, "LdrpModuleDatatableLock");
     Ok(Some(Offsets {
-        ldrp_insert_module_to_index,
-        ldrp_unload_node,
-        ldrp_insert_data_table_entry,
+        ldrp_hash_table,
+        ldrp_module_datatable_lock,
     }))
 }
 
@@ -277,18 +275,16 @@ mod test {
             .await
             .offsets
             .contains_key("46F6F5C30E7147E46F2A953A5DAF201A1"));
-        assert_eq!(response.ldrp_insert_module_to_index, 0x7FD40);
-        assert_eq!(response.ldrp_unload_node, 0x6A3E8);
-        assert_eq!(response.ldrp_insert_data_table_entry, 0x14620);
+        assert_eq!(response.ldrp_hash_table, 0x16A140);
+        assert_eq!(response.ldrp_module_datatable_lock, 0x16B240);
     }
 
     #[tokio::test]
     async fn good_cache() {
         let database = Mutex::new(OffsetsDatabase {
             offsets: hashmap!("46F6F5C30E7147E46F2A953A5DAF201A1".into() => Offsets{
-            ldrp_insert_module_to_index: 1,
-            ldrp_unload_node: 2,
-            ldrp_insert_data_table_entry: 3,
+            ldrp_hash_table: 1,
+            ldrp_module_datatable_lock: 2,
             }),
         });
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
@@ -302,8 +298,7 @@ mod test {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A1".into(),
         });
         let response = server.get_offsets(request).await.unwrap().into_inner();
-        assert_eq!(response.ldrp_insert_module_to_index, 1);
-        assert_eq!(response.ldrp_unload_node, 2);
-        assert_eq!(response.ldrp_insert_data_table_entry, 3);
+        assert_eq!(response.ldrp_hash_table, 1);
+        assert_eq!(response.ldrp_module_datatable_lock, 2);
     }
 }

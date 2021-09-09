@@ -2,18 +2,15 @@ use crate::{
     error::{Err, Error},
     map::MappedFile,
     offsets::{offset_client::OffsetClient, OffsetsRequest},
-    primitives::{protected_write, ProtectionGuard},
+    primitives::{protected_write, ProtectionGuard, RtlHashTable, RtlMutex},
     util::to_wide,
 };
 use anyhow::Result;
 use log::debug;
-use ntapi::{
-    ntldr::{
+use ntapi::{ntldr::{
         LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
         LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DDAG_NODE, LDR_DDAG_STATE, PLDR_INIT_ROUTINE,
-    },
-    ntrtl::RtlInitUnicodeString,
-};
+    }, ntrtl::{HASH_STRING_ALGORITHM_DEFAULT, InsertTailList, RtlHashUnicodeString, RtlInitUnicodeString}};
 use std::{
     ffi::{c_void, CStr},
     path::Path,
@@ -27,6 +24,7 @@ use winapi::{
             BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
             UNICODE_STRING,
         },
+        ntstatus::STATUS_SUCCESS,
     },
     um::{
         libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
@@ -41,17 +39,13 @@ use winapi::{
     },
 };
 
+/// The context of Nt functions and statics
 #[allow(non_snake_case)]
-pub struct NtFunctions {
-    LdrpInsertModuleToIndex: unsafe fn(
-        tbl_entry: *const LDR_DATA_TABLE_ENTRY,
-        nt_headers: *const IMAGE_NT_HEADERS64,
-    ) -> u32,
-    LdrpUnloadNode: unsafe fn(ddag_node: *const LDR_DDAG_NODE),
-    LdrpInsertDataTableEntry: unsafe fn(tbl_entry: *const LDR_DATA_TABLE_ENTRY),
+pub struct NtContext<'a> {
+    LdrpHashTable: RtlMutex<'a, RtlHashTable<'a>>,
 }
 
-impl NtFunctions {
+impl<'a> NtContext<'a> {
     /// Gets the loaded NTDLL hash
     ///
     /// # Arguments
@@ -98,7 +92,7 @@ impl NtFunctions {
         }
     }
 
-    /// Resolves the functions used by the mapper
+    /// Resolves the context used by the mapper
     ///
     /// # Arguments
     ///
@@ -107,24 +101,19 @@ impl NtFunctions {
     pub async fn resolve(
         server_hostname: &str,
         server_port: u16,
-    ) -> Result<NtFunctions, anyhow::Error> {
+    ) -> Result<NtContext<'a>, anyhow::Error> {
         let mut client =
             OffsetClient::connect(format!("http://{}:{}", server_hostname, server_port)).await?;
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
         let request = tonic::Request::new(OffsetsRequest {
-            ntdll_hash: NtFunctions::get_ntdll_hash(ntdll)?,
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
         });
         let response = client.get_offsets(request).await?.into_inner();
         unsafe {
-            Ok(NtFunctions {
-                LdrpInsertModuleToIndex: std::mem::transmute(
-                    ntdll.offset(response.ldrp_insert_module_to_index as isize),
-                ),
-                LdrpUnloadNode: std::mem::transmute(
-                    ntdll.offset(response.ldrp_unload_node as isize),
-                ),
-                LdrpInsertDataTableEntry: std::mem::transmute(
-                    ntdll.offset(response.ldrp_insert_data_table_entry as isize),
+            Ok(NtContext {
+                LdrpHashTable: RtlMutex::from_ref(
+                    std::mem::transmute(ntdll.offset(response.ldrp_hash_table as isize)),
+                    std::mem::transmute(ntdll.offset(response.ldrp_module_datatable_lock as isize)),
                 ),
             })
         }
@@ -149,31 +138,42 @@ pub struct PortableExecutable<'a> {
     section_protections: Vec<ProtectionGuard>,
     loader_entry: Pin<Box<LDR_DATA_TABLE_ENTRY>>,
     ddag_node: Pin<Box<LDR_DDAG_NODE>>,
-    functions: &'a NtFunctions,
+    context: &'a NtContext<'a>,
     ldr_entry_init: bool,
 }
 
 impl<'a> PortableExecutable<'a> {
     /// Initializes the loader entry
-    fn init_ldr_entry(&mut self, nt_headers: &IMAGE_NT_HEADERS64) -> Result<()> {
+    fn init_ldr_entry(&mut self) -> Result<()> {
         self.loader_entry.DllBase = self.file.contents_mut();
         self.loader_entry.DdagNode = self.ddag_node.as_mut().get_mut();
         unsafe {
             RtlInitUnicodeString(&mut self.loader_entry.BaseDllName, self.file_name.as_ptr());
             RtlInitUnicodeString(&mut self.loader_entry.FullDllName, self.file_path.as_ptr());
         }
-        self.ddag_node.State = LdrModulesReadyToRun;
-        self.ddag_node.LoadCount = u32::MAX;
+        // add the module hash value to the loader entry
+        let mut hash = 0;
         unsafe {
-            if (self.functions.LdrpInsertModuleToIndex)(
-                self.loader_entry.as_ref().get_ref(),
-                nt_headers,
-            ) == 0
+            if RtlHashUnicodeString(
+                &self.loader_entry.BaseDllName,
+                true as u8,
+                HASH_STRING_ALGORITHM_DEFAULT,
+                &mut hash,
+            ) != STATUS_SUCCESS
             {
                 return Err(Error(Err::LdrEntry).into());
             }
-            (self.functions.LdrpInsertDataTableEntry)(self.loader_entry.as_ref().get_ref());
-        };
+        }
+        self.loader_entry.BaseNameHashValue = hash;
+        unsafe { self.loader_entry.u2.set_ProcessStaticImport(1); }
+        self.ddag_node.State = LdrModulesReadyToRun;
+        self.ddag_node.LoadCount = u32::MAX;
+        // insert the entry into the hash table and other relevant structures
+        unsafe { 
+            InsertTailList(
+                &mut self.context.LdrpHashTable.lock().buckets[(hash & 0x1f) as usize], 
+                &mut self.loader_entry.HashLinks);
+        }
         Ok(())
     }
 
@@ -182,8 +182,8 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `path`: The path to the executable file
-    /// `functions`: The resolved Nt Functions
-    pub fn load(path: &str, functions: &'a NtFunctions) -> Result<PortableExecutable<'a>> {
+    /// `context`: The resolved Nt Context
+    pub fn load(path: &str, context: &'a NtContext<'a>) -> Result<PortableExecutable<'a>> {
         // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
@@ -252,11 +252,11 @@ impl<'a> PortableExecutable<'a> {
                 CondenseLink: SINGLE_LIST_ENTRY::default(),
                 PreorderNumber: 0,
             }),
-            functions,
+            context,
             ldr_entry_init: false,
         };
+        pe.init_ldr_entry()?;
         pe.resolve_imports()?;
-        pe.init_ldr_entry(nt_headers)?;
         // protect last
         pe.protect_sections()?;
         pe.ldr_entry_init = true;
@@ -467,7 +467,7 @@ impl<'a> Drop for PortableExecutable<'a> {
     // unload the loader entry. this is used for GetModuleHandle
     fn drop(&mut self) {
         if self.ldr_entry_init {
-           // unsafe { (self.functions.LdrpUnloadNode)(self.ddag_node.as_ref().get_ref()) }
+            // remove hash table and linked list entries
         }
     }
 }
@@ -491,9 +491,9 @@ mod test {
     static INIT: Once = Once::new();
 
     lazy_static! {
-        static ref NT_FUNCTIONS: NtFunctions = Runtime::new()
+        static ref NT_CONTEXT: NtContext<'static> = Runtime::new()
             .unwrap()
-            .block_on(NtFunctions::resolve("localhost", 42221))
+            .block_on(NtContext::resolve("localhost", 42221))
             .unwrap();
     }
 
@@ -514,7 +514,7 @@ mod test {
     #[serial]
     fn bad_dos() {
         setup();
-        let err: std::io::Error = PortableExecutable::load("test/baddos.exe", &NT_FUNCTIONS)
+        let err: std::io::Error = PortableExecutable::load("test/baddos.exe", &NT_CONTEXT)
             .err()
             .unwrap()
             .downcast()
@@ -526,7 +526,7 @@ mod test {
     #[serial]
     fn bad_section() {
         setup();
-        let err: std::io::Error = PortableExecutable::load("test/badsection.exe", &NT_FUNCTIONS)
+        let err: std::io::Error = PortableExecutable::load("test/badsection.exe", &NT_CONTEXT)
             .err()
             .unwrap()
             .downcast()
@@ -538,7 +538,7 @@ mod test {
     #[serial]
     fn bad_entry() {
         setup();
-        let err: Error = PortableExecutable::load("test/badentry.exe", &NT_FUNCTIONS)
+        let err: Error = PortableExecutable::load("test/badentry.exe", &NT_CONTEXT)
             .err()
             .unwrap()
             .downcast()
@@ -550,7 +550,7 @@ mod test {
     #[serial]
     fn bad_mod() {
         setup();
-        let err: std::io::Error = PortableExecutable::load("test/badmod.exe", &NT_FUNCTIONS)
+        let err: std::io::Error = PortableExecutable::load("test/badmod.exe", &NT_CONTEXT)
             .err()
             .unwrap()
             .downcast()
@@ -562,7 +562,7 @@ mod test {
     #[serial]
     fn bad_proc() {
         setup();
-        let err: std::io::Error = PortableExecutable::load("test/badproc.exe", &NT_FUNCTIONS)
+        let err: std::io::Error = PortableExecutable::load("test/badproc.exe", &NT_CONTEXT)
             .err()
             .unwrap()
             .downcast()
@@ -575,7 +575,7 @@ mod test {
     #[serial]
     fn bad_arch() {
         setup();
-        let err: Error = PortableExecutable::load("test/x86.exe", &NT_FUNCTIONS)
+        let err: Error = PortableExecutable::load("test/x86.exe", &NT_CONTEXT)
             .err()
             .unwrap()
             .downcast()
@@ -587,7 +587,7 @@ mod test {
     #[serial]
     fn basic_image() {
         setup();
-        let image = PortableExecutable::load("test/basic.exe", &NT_FUNCTIONS).unwrap();
+        let image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
         unsafe {
             assert_eq!(image.run().unwrap(), 23);
         }
@@ -598,7 +598,7 @@ mod test {
     fn ldr_entry() {
         setup();
         {
-            let _image = PortableExecutable::load("test/basic.exe", &NT_FUNCTIONS).unwrap();
+            let _image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
             let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
             assert!(!handle.is_null());
         }

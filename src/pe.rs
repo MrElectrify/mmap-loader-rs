@@ -680,7 +680,7 @@ mod test {
         setup();
         let image = PortableExecutable::load("test/tls.exe", &NT_CONTEXT).unwrap();
         unsafe {
-            assert_eq!(image.run().unwrap(), 8);
+            assert_eq!(image.run().unwrap(), 7);
         }
     }
 }

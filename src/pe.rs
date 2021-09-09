@@ -6,7 +6,7 @@ use crate::{
     util::to_wide,
 };
 use anyhow::Result;
-use log::debug;
+use log::{debug, error};
 use ntapi::{
     ntldr::{
         LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
@@ -24,14 +24,30 @@ use std::{
     ptr,
     ptr::null_mut,
 };
-use winapi::{shared::{
+use winapi::{
+    shared::{
         guiddef::GUID,
         ntdef::{
             BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
             UNICODE_STRING,
         },
         ntstatus::STATUS_SUCCESS,
-    }, um::{libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA}, winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, IMAGE_DEBUG_DIRECTORY, IMAGE_DEBUG_TYPE_CODEVIEW, IMAGE_DIRECTORY_ENTRY_DEBUG, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DIRECTORY_ENTRY_TLS, IMAGE_DOS_HEADER, IMAGE_FILE_MACHINE_AMD64, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_ORDINAL_FLAG, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_THUNK_DATA, IMAGE_TLS_DIRECTORY, PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE, PVOID, RTL_SRWLOCK}}};
+    },
+    um::{
+        libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
+        winnt::{
+            RtlAddFunctionTable, RtlDeleteFunctionTable, DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH,
+            IMAGE_DEBUG_DIRECTORY, IMAGE_DEBUG_TYPE_CODEVIEW, IMAGE_DIRECTORY_ENTRY_DEBUG,
+            IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_DIRECTORY_ENTRY_IMPORT,
+            IMAGE_DIRECTORY_ENTRY_TLS, IMAGE_DOS_HEADER, IMAGE_FILE_MACHINE_AMD64,
+            IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_HEADERS64,
+            IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_ORDINAL_FLAG, IMAGE_RUNTIME_FUNCTION_ENTRY,
+            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_THUNK_DATA,
+            IMAGE_TLS_DIRECTORY, PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE, PVOID,
+            RTL_SRWLOCK,
+        },
+    },
+};
 
 /// The context of Nt functions and statics
 #[allow(non_snake_case)]
@@ -107,8 +123,10 @@ impl<'a> NtContext<'a> {
         unsafe {
             Ok(NtContext {
                 LdrpHashTable: RtlMutex::from_ref(
-                    &mut *(ntdll.offset(response.ldrp_hash_table as isize) as *mut [LIST_ENTRY; 32]),
-                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize) as *mut RTL_SRWLOCK),
+                    &mut *(ntdll.offset(response.ldrp_hash_table as isize)
+                        as *mut [LIST_ENTRY; 32]),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
+                        as *mut RTL_SRWLOCK),
                 ),
                 LdrpHandleTlsData: std::mem::transmute(
                     ntdll.offset(response.ldrp_handle_tls_data as isize),
@@ -141,6 +159,76 @@ pub struct PortableExecutable<'a> {
 }
 
 impl<'a> PortableExecutable<'a> {
+    /// Adds the module to the loader hash table, enabling functions like
+    /// `GetModuleHandle` to work
+    fn add_to_hash_table(&mut self) -> Result<()> {
+        // insert the entry into the hash table and other relevant structures
+        unsafe {
+            InsertTailList(
+                &mut self.context.LdrpHashTable.lock()
+                    [(self.loader_entry.BaseNameHashValue & 0x1f) as usize],
+                &mut self.loader_entry.HashLinks,
+            );
+        }
+        Ok(())
+    }
+
+    /// Removes the module from the loader hash table
+    fn remove_from_hash_table(&mut self) -> Result<()> {
+        // remove hash table and linked list entries
+        let mut hash_table = self.context.LdrpHashTable.lock();
+        // find our entry
+        let first_entry = &mut hash_table[(self.loader_entry.BaseNameHashValue & 0x1f) as usize];
+        let mut entry = first_entry.Flink;
+        // if the next entry is the first one, we are done
+        while !ptr::eq(entry as *const LIST_ENTRY, first_entry) {
+            if ptr::eq(entry as *const _, &self.loader_entry.HashLinks as *const _) {
+                // remove the entry
+                unsafe {
+                    RemoveEntryList(entry.as_mut().unwrap());
+                }
+                return Ok(());
+            }
+            entry = unsafe { (*entry).Flink };
+        }
+        debug!("Failed to find reference");
+        Ok(())
+    }
+
+    /// Enables exception handling for the module
+    fn enable_exceptions(&mut self) -> Result<()> {
+        // get the exception table
+        let exception_table = self.get_exception_table()?;
+        if exception_table.is_empty() {
+            return Ok(());
+        }
+        // add the table to the process
+        if unsafe {
+            RtlAddFunctionTable(
+                exception_table.as_mut_ptr(),
+                exception_table.len() as u32,
+                self.file.contents() as u64,
+            ) == false as u8
+        } {
+            return Err(Error(Err::ExceptionTableEntry).into());
+        }
+        Ok(())
+    }
+
+    /// Disables exception handling for the module
+    fn disable_exceptions(&mut self) -> Result<()> {
+        // get the exception table
+        let exception_table = self.get_exception_table()?;
+        if exception_table.is_empty() {
+            return Ok(());
+        }
+        // remove the table from the process
+        if unsafe { RtlDeleteFunctionTable(exception_table.as_mut_ptr()) == false as u8 } {
+            return Err(Error(Err::ExceptionTableEntry).into());
+        }
+        Ok(())
+    }
+
     /// Execute TLS callbacks
     fn execute_tls_callbacks(&mut self, reason: u32) -> Result<()> {
         let tls_directory =
@@ -155,7 +243,9 @@ impl<'a> PortableExecutable<'a> {
             .ok_or(Error(Err::TLSOutOfBounds))?;
         let mut tls_callback = unsafe {
             self.file
-                .get_rva::<Option<unsafe extern "stdcall" fn(PVOID, u32, PVOID)>>(((*tls_directory).AddressOfCallBacks - self.file.contents() as u64) as isize)
+                .get_rva::<Option<unsafe extern "stdcall" fn(PVOID, u32, PVOID)>>(
+                    ((*tls_directory).AddressOfCallBacks - self.file.contents() as u64) as isize,
+                )
                 .ok_or(Error(Err::CallbackOutOfBounds))?
         };
         // execute all of the TLS callbacks
@@ -179,6 +269,26 @@ impl<'a> PortableExecutable<'a> {
         } else {
             Ok(())
         }
+    }
+
+    /// Gets the exception table for the module, and its size
+    fn get_exception_table(&mut self) -> Result<&'a mut [IMAGE_RUNTIME_FUNCTION_ENTRY]> {
+        let exception_dir =
+            &self.nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION as usize];
+        if exception_dir.VirtualAddress == 0 {
+            // there is no exception table
+            return Ok(&mut []);
+        }
+        let exception_table = self
+            .file
+            .get_rva_mut::<IMAGE_RUNTIME_FUNCTION_ENTRY>(exception_dir.VirtualAddress as isize)
+            .ok_or(Error(Err::ExceptionTableOutOfBounds))?;
+        return Ok(unsafe {
+            std::slice::from_raw_parts_mut(
+                exception_table,
+                exception_dir.Size as usize / std::mem::size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>(),
+            )
+        });
     }
 
     /// Initializes the loader entry
@@ -211,13 +321,8 @@ impl<'a> PortableExecutable<'a> {
         self.loader_entry.SizeOfImage = self.nt_headers.OptionalHeader.SizeOfImage;
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
-        // insert the entry into the hash table and other relevant structures
-        unsafe {
-            InsertTailList(
-                &mut self.context.LdrpHashTable.lock()[(hash & 0x1f) as usize],
-                &mut self.loader_entry.HashLinks,
-            );
-        }
+        // add to the loader hash table
+        self.add_to_hash_table()?;
         // store that we initialized the loader entry such that we can remove it
         self.ldr_entry_init = true;
         Ok(())
@@ -304,6 +409,7 @@ impl<'a> PortableExecutable<'a> {
         pe.init_ldr_entry()?;
         pe.resolve_imports()?;
         pe.protect_sections()?;
+        pe.enable_exceptions()?;
         pe.execute_tls_callbacks(DLL_PROCESS_ATTACH)?;
         pe.handle_tls_data()?;
         Ok(pe)
@@ -513,29 +619,18 @@ impl<'a> Drop for PortableExecutable<'a> {
     // unload the loader entry. this is used for GetModuleHandle
     fn drop(&mut self) {
         // call each tls callback with process_detach
-        match self.execute_tls_callbacks(DLL_PROCESS_DETACH) {
-            Err(e) => { eprintln!("Failed to execute TLS callbacks on exit: {}", e.to_string()) },
-            _ => {}
+        if let Err(e) = self.execute_tls_callbacks(DLL_PROCESS_DETACH) {
+            error!("Failed to execute TLS callbacks on exit: {}", e.to_string())
         };
+        // disable exceptions afterwards in case a TLS callback uses them
+        if let Err(e) = self.disable_exceptions() {
+            error!("Failed to disable exceptions: {}", e.to_string())
+        }
+        // finally, remove ourselves from the hash table
         if self.ldr_entry_init {
-            // remove hash table and linked list entries
-            let mut hash_table = self.context.LdrpHashTable.lock();
-            // find our entry
-            let first_entry =
-                &mut hash_table[(self.loader_entry.BaseNameHashValue & 0x1f) as usize];
-            let mut entry = first_entry.Flink;
-            // if the next entry is the first one, we are done
-            while !ptr::eq(entry as *const LIST_ENTRY, first_entry) {
-                if ptr::eq(entry as *const _, &self.loader_entry.HashLinks as *const _) {
-                    // remove the entry
-                    unsafe {
-                        RemoveEntryList(entry.as_mut().unwrap());
-                    }
-                    return;
-                }
-                entry = unsafe { (*entry).Flink };
+            if let Err(e) = self.remove_from_hash_table() {
+                error!("Failed to remove entry from hash table: {}", e.to_string())
             }
-            debug!("Failed to find reference");
         }
     }
 }

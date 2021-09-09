@@ -73,7 +73,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         .iter()
         .map(|sym| sym.parse())
         .filter_map(|data| match data {
-            SymbolData::Public(proc) if proc.code => Ok(Some(proc)),
+            SymbolData::Public(proc) => Ok(Some(proc)),
             _ => Ok(None),
         })
         .filter_map(|proc| match proc.offset.to_rva(&address_map) {

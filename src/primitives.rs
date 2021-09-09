@@ -8,7 +8,7 @@ use anyhow::Result;
 
 use ntapi::ntrtl::{RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive};
 use winapi::{
-    shared::{minwindef::DWORD, ntdef::LIST_ENTRY},
+    shared::minwindef::DWORD,
     um::{
         handleapi::CloseHandle,
         memoryapi::VirtualProtect,
@@ -27,11 +27,6 @@ pub struct ProtectionGuard {
     addr: *mut c_void,
     size: usize,
     old_prot: DWORD,
-}
-
-/// A very simple, compact hash table that is used as RtlHashTable
-pub struct RtlHashTable<'a> {
-    pub buckets: &'a mut [LIST_ENTRY; 32],
 }
 
 /// A mutex based on an RTL Slim Read/Write lock
@@ -121,17 +116,6 @@ impl Drop for ProtectionGuard {
         unsafe {
             VirtualProtect(self.addr, self.size, self.old_prot, &mut dummy);
         }
-    }
-}
-
-impl<'a> RtlHashTable<'a> {
-    /// Creates an Rtl hash table from the buckets
-    ///
-    /// # Arguments
-    ///
-    /// `buckets`: The hash table buckets
-    pub fn from_ref(buckets: &'a mut [LIST_ENTRY; 32]) -> RtlHashTable<'a> {
-        RtlHashTable { buckets }
     }
 }
 

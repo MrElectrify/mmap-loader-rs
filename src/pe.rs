@@ -2,7 +2,7 @@ use crate::{
     error::{Err, Error},
     map::MappedFile,
     offsets::{offset_client::OffsetClient, OffsetsRequest},
-    primitives::{protected_write, ProtectionGuard, RtlHashTable, RtlMutex},
+    primitives::{protected_write, ProtectionGuard, RtlMutex},
     util::to_wide,
 };
 use anyhow::Result;
@@ -42,7 +42,7 @@ use winapi::{
 /// The context of Nt functions and statics
 #[allow(non_snake_case)]
 pub struct NtContext<'a> {
-    LdrpHashTable: RtlMutex<'a, RtlHashTable<'a>>,
+    LdrpHashTable: RtlMutex<'a, [LIST_ENTRY; 32]>,
 }
 
 impl<'a> NtContext<'a> {
@@ -171,7 +171,7 @@ impl<'a> PortableExecutable<'a> {
         // insert the entry into the hash table and other relevant structures
         unsafe { 
             InsertTailList(
-                &mut self.context.LdrpHashTable.lock().buckets[(hash & 0x1f) as usize], 
+                &mut self.context.LdrpHashTable.lock()[(hash & 0x1f) as usize], 
                 &mut self.loader_entry.HashLinks);
         }
         Ok(())

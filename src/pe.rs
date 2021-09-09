@@ -7,42 +7,37 @@ use crate::{
 };
 use anyhow::Result;
 use log::debug;
-use ntapi::{ntldr::{
+use ntapi::{
+    ntldr::{
         LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
         LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DDAG_NODE, LDR_DDAG_STATE, PLDR_INIT_ROUTINE,
-    }, ntrtl::{HASH_STRING_ALGORITHM_DEFAULT, InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlInitUnicodeString}};
+    },
+    ntrtl::{
+        InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlInitUnicodeString,
+        HASH_STRING_ALGORITHM_DEFAULT,
+    },
+};
 use std::{
     ffi::{c_void, CStr},
     path::Path,
     pin::Pin,
+    ptr,
     ptr::null_mut,
 };
-use winapi::{
-    shared::{
+use winapi::{shared::{
         guiddef::GUID,
         ntdef::{
             BOOLEAN, LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
             UNICODE_STRING,
         },
         ntstatus::STATUS_SUCCESS,
-    },
-    um::{
-        libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
-        winnt::{
-            DLL_PROCESS_ATTACH, IMAGE_DEBUG_DIRECTORY, IMAGE_DEBUG_TYPE_CODEVIEW,
-            IMAGE_DIRECTORY_ENTRY_DEBUG, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DOS_HEADER,
-            IMAGE_FILE_MACHINE_AMD64, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR,
-            IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_ORDINAL_FLAG,
-            IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_THUNK_DATA,
-            PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE,
-        },
-    },
-};
+    }, um::{libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA}, winnt::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, IMAGE_DEBUG_DIRECTORY, IMAGE_DEBUG_TYPE_CODEVIEW, IMAGE_DIRECTORY_ENTRY_DEBUG, IMAGE_DIRECTORY_ENTRY_IMPORT, IMAGE_DIRECTORY_ENTRY_TLS, IMAGE_DOS_HEADER, IMAGE_FILE_MACHINE_AMD64, IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_HEADERS64, IMAGE_NT_OPTIONAL_HDR64_MAGIC, IMAGE_ORDINAL_FLAG, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE, IMAGE_SECTION_HEADER, IMAGE_THUNK_DATA, IMAGE_TLS_DIRECTORY, PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE, PVOID, RTL_SRWLOCK}}};
 
 /// The context of Nt functions and statics
 #[allow(non_snake_case)]
 pub struct NtContext<'a> {
     LdrpHashTable: RtlMutex<'a, [LIST_ENTRY; 32]>,
+    LdrpHandleTlsData: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY) -> i32,
 }
 
 impl<'a> NtContext<'a> {
@@ -112,8 +107,11 @@ impl<'a> NtContext<'a> {
         unsafe {
             Ok(NtContext {
                 LdrpHashTable: RtlMutex::from_ref(
-                    std::mem::transmute(ntdll.offset(response.ldrp_hash_table as isize)),
-                    std::mem::transmute(ntdll.offset(response.ldrp_module_datatable_lock as isize)),
+                    &mut *(ntdll.offset(response.ldrp_hash_table as isize) as *mut [LIST_ENTRY; 32]),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize) as *mut RTL_SRWLOCK),
+                ),
+                LdrpHandleTlsData: std::mem::transmute(
+                    ntdll.offset(response.ldrp_handle_tls_data as isize),
                 ),
             })
         }
@@ -143,6 +141,46 @@ pub struct PortableExecutable<'a> {
 }
 
 impl<'a> PortableExecutable<'a> {
+    /// Execute TLS callbacks
+    fn execute_tls_callbacks(&mut self, reason: u32) -> Result<()> {
+        let tls_directory =
+            &self.nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS as usize];
+        // navigate to the tls directory if it exists
+        if tls_directory.VirtualAddress == 0 {
+            return Ok(());
+        }
+        let tls_directory = self
+            .file
+            .get_rva::<IMAGE_TLS_DIRECTORY>(tls_directory.VirtualAddress as isize)
+            .ok_or(Error(Err::TLSOutOfBounds))?;
+        let mut tls_callback = unsafe {
+            self.file
+                .get_rva::<Option<unsafe extern "stdcall" fn(PVOID, u32, PVOID)>>(((*tls_directory).AddressOfCallBacks - self.file.contents() as u64) as isize)
+                .ok_or(Error(Err::CallbackOutOfBounds))?
+        };
+        // execute all of the TLS callbacks
+        unsafe {
+            while (*tls_callback).is_some() {
+                debug!("Executing TLS callback at {:p}", tls_callback);
+                (*tls_callback).unwrap()(self.file.contents_mut(), reason, null_mut());
+                // TLS callbacks are in an array
+                tls_callback = tls_callback.offset(1);
+            }
+        }
+        Ok(())
+    }
+
+    /// Handle TLS data
+    fn handle_tls_data(&mut self) -> Result<()> {
+        if unsafe { (self.context.LdrpHandleTlsData)(self.loader_entry.as_mut().get_mut()) }
+            != STATUS_SUCCESS
+        {
+            Err(Error(Err::TLSData).into())
+        } else {
+            Ok(())
+        }
+    }
+
     /// Initializes the loader entry
     fn init_ldr_entry(&mut self) -> Result<()> {
         self.loader_entry.DllBase = self.file.contents_mut();
@@ -165,15 +203,23 @@ impl<'a> PortableExecutable<'a> {
             }
         }
         self.loader_entry.BaseNameHashValue = hash;
-        unsafe { self.loader_entry.u2.set_ProcessStaticImport(1); }
+        // set that we need to process static imports
+        unsafe {
+            self.loader_entry.u2.set_ProcessStaticImport(1);
+        }
+        // add the executable size
+        self.loader_entry.SizeOfImage = self.nt_headers.OptionalHeader.SizeOfImage;
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         // insert the entry into the hash table and other relevant structures
-        unsafe { 
+        unsafe {
             InsertTailList(
-                &mut self.context.LdrpHashTable.lock()[(hash & 0x1f) as usize], 
-                &mut self.loader_entry.HashLinks);
+                &mut self.context.LdrpHashTable.lock()[(hash & 0x1f) as usize],
+                &mut self.loader_entry.HashLinks,
+            );
         }
+        // store that we initialized the loader entry such that we can remove it
+        self.ldr_entry_init = true;
         Ok(())
     }
 
@@ -257,9 +303,9 @@ impl<'a> PortableExecutable<'a> {
         };
         pe.init_ldr_entry()?;
         pe.resolve_imports()?;
-        // protect last
         pe.protect_sections()?;
-        pe.ldr_entry_init = true;
+        pe.execute_tls_callbacks(DLL_PROCESS_ATTACH)?;
+        pe.handle_tls_data()?;
         Ok(pe)
     }
 
@@ -466,17 +512,25 @@ impl<'a> PortableExecutable<'a> {
 impl<'a> Drop for PortableExecutable<'a> {
     // unload the loader entry. this is used for GetModuleHandle
     fn drop(&mut self) {
+        // call each tls callback with process_detach
+        match self.execute_tls_callbacks(DLL_PROCESS_DETACH) {
+            Err(e) => { eprintln!("Failed to execute TLS callbacks on exit: {}", e.to_string()) },
+            _ => {}
+        };
         if self.ldr_entry_init {
             // remove hash table and linked list entries
             let mut hash_table = self.context.LdrpHashTable.lock();
             // find our entry
-            let first_entry = &mut hash_table[(self.loader_entry.BaseNameHashValue & 0x1f) as usize];
+            let first_entry =
+                &mut hash_table[(self.loader_entry.BaseNameHashValue & 0x1f) as usize];
             let mut entry = first_entry.Flink;
             // if the next entry is the first one, we are done
-            while entry as *const LIST_ENTRY != first_entry {
-                if entry as *const _ == &self.loader_entry.HashLinks as *const _ {
+            while !ptr::eq(entry as *const LIST_ENTRY, first_entry) {
+                if ptr::eq(entry as *const _, &self.loader_entry.HashLinks as *const _) {
                     // remove the entry
-                    unsafe { RemoveEntryList(entry.as_mut().unwrap()); }
+                    unsafe {
+                        RemoveEntryList(entry.as_mut().unwrap());
+                    }
                     return;
                 }
                 entry = unsafe { (*entry).Flink };
@@ -618,5 +672,15 @@ mod test {
         }
         let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
         assert!(handle.is_null());
+    }
+
+    #[test]
+    #[serial]
+    fn tls() {
+        setup();
+        let image = PortableExecutable::load("test/tls.exe", &NT_CONTEXT).unwrap();
+        unsafe {
+            assert_eq!(image.run().unwrap(), 8);
+        }
     }
 }

@@ -12,4 +12,5 @@ message OffsetsRequest {
 message OffsetsResponse {
     uint32 LdrpHashTable = 1;
     uint32 LdrpModuleDatatableLock = 2; 
+    uint32 LdrpHandleTlsData = 3;
 }

@@ -125,7 +125,7 @@ impl<'a, T> RtlMutex<'a, T> {
         unsafe {
             RtlTryAcquireSRWLockExclusive(*self.lock_ref.get());
         }
-        RtlMutexGuard { mutex: &self }
+        RtlMutexGuard { mutex: self }
     }
 
     /// Creates a new mutex wrapped around a Rtl Slim Read/Write lock

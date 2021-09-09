@@ -83,9 +83,11 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         .collect()?;
     let ldrp_hash_table = *get_offset!(map, "LdrpHashTable");
     let ldrp_module_datatable_lock = *get_offset!(map, "LdrpModuleDatatableLock");
+    let ldrp_handle_tls_data = *get_offset!(map, "LdrpHandleTlsData");
     Ok(Some(Offsets {
         ldrp_hash_table,
         ldrp_module_datatable_lock,
+        ldrp_handle_tls_data,
     }))
 }
 
@@ -277,6 +279,7 @@ mod test {
             .contains_key("46F6F5C30E7147E46F2A953A5DAF201A1"));
         assert_eq!(response.ldrp_hash_table, 0x16A140);
         assert_eq!(response.ldrp_module_datatable_lock, 0x16B240);
+        assert_eq!(response.ldrp_handle_tls_data, 0x47C14);
     }
 
     #[tokio::test]
@@ -285,6 +288,7 @@ mod test {
             offsets: hashmap!("46F6F5C30E7147E46F2A953A5DAF201A1".into() => Offsets{
             ldrp_hash_table: 1,
             ldrp_module_datatable_lock: 2,
+            ldrp_handle_tls_data: 3,
             }),
         });
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);

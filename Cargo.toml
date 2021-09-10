@@ -1,7 +1,13 @@
 [package]
 name = "mmap-loader"
+authors = ["Andrew Buck"]
+description = "A Portable Executable manual map loader"
 version = "0.1.0"
 edition = "2018"
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/MrElectrify/mmap-loader-rs"
+keywords = ["pe", "map", "manual-map"]
 
 [[bin]]
 name = "mmap-offset-server"

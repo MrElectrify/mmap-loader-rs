@@ -13,6 +13,18 @@ debug = false
 panic = "abort"
 lto = true
 
+[[example]]
+name = "print_return"
+path = "examples/print_return.rs"
+
+[[example]]
+name = "print_return_no_server"
+path = "examples/print_return_no_server.rs"
+
+[[example]]
+name = "start_with_dll"
+path = "examples/start_with_dll.rs"
+
 [build-dependencies]
 tonic-build = "0.5"
 

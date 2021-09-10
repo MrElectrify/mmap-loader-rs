@@ -449,7 +449,8 @@ impl<'a> PortableExecutable<'a> {
         unsafe {
             // we transmute here because I have no earthly idea how to return a generic function
             let entry_point: PLDR_INIT_ROUTINE = std::mem::transmute(
-                file.get_rva::<u8>(address_of_ep as isize).ok_or(Error(Err::EPOutOfBounds))?,
+                file.get_rva::<u8>(address_of_ep as isize)
+                    .ok_or(Error(Err::EPOutOfBounds))?,
             );
             Ok(entry_point)
         }

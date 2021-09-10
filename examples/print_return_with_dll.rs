@@ -1,3 +1,9 @@
+/// Usage: print_return_with_dll <executable:path> <dll:path>
+/// <host:hostname:localhost> <port:u16:42220>
+/// Description: Prints the executable return value, after
+/// loading a DLL before the executable begins executing.
+/// Requires a separate remote PDB server
+
 use mmap_loader::pe::{NtContext, PortableExecutable};
 use std::env;
 

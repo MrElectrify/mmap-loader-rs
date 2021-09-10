@@ -18,12 +18,12 @@ name = "print_return"
 path = "examples/print_return.rs"
 
 [[example]]
-name = "print_return_no_server"
-path = "examples/print_return_no_server.rs"
+name = "print_return_with_dll"
+path = "examples/print_return_with_dll.rs"
 
 [[example]]
-name = "start_with_dll"
-path = "examples/start_with_dll.rs"
+name = "print_return_no_server"
+path = "examples/print_return_no_server.rs"
 
 [build-dependencies]
 tonic-build = "0.5"

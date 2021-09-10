@@ -1,3 +1,8 @@
+/// Usage: print_return_no_server <executable:path>
+/// Description: Prints the executable return value.
+/// Bundles the server with the client and does not
+/// require a separate server
+
 use mmap_loader::{
     pe::{NtContext, PortableExecutable},
     server::Server,

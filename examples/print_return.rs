@@ -1,3 +1,8 @@
+/// Usage: print_return <executable:path>
+/// <host:hostname:localhost> <port:u16:42220>
+/// Description: Prints the executable return value.
+/// Requires a separate remote PDB server
+
 use mmap_loader::pe::{NtContext, PortableExecutable};
 use std::env;
 
@@ -7,7 +12,7 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 || args.len() > 4 {
         eprintln!(
-            "Usage: {} <executable:path> <host:hostname> <port:u16>",
+            "Usage: {} <executable:path> <host:hostname:localhost> <port:u16:42220>",
             args[0]
         );
         return Ok(());

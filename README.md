@@ -16,17 +16,4 @@ A Windows Portable Executable Manual Map Loader that supports both executable an
 - PEs are not un-loaded from OS structures to reduce the number of required signatures to upkeep. If necessary, functions exist to reverse all OS calls.
 
 ## Usage
-```rs
-use mmap_loader::pe::{NtContext, PortableExecutable};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-  // load NT functions and constants. this fetches offsets from a PDB parser server, included in `mmap_loader::server::Server`
-  let nt_context = NtContext::resolve("localhost", 42221).await?;
-  // load the PE file. this can be a DLL or EXE file
-  let pe = PortableExecutable::load("foo.exe", &nt_context)?;
-  // any other code. load DLLs, whatever
-  // call the entry point when we are ready. this returns whatever the entry point returns
-  pe.run();
-}
-```
+Check out the [examples](examples/)

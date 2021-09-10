@@ -1,7 +1,8 @@
 use crate::{
+    db::OffsetHandler,
     error::{Err, Error},
     map::MappedFile,
-    offsets::{offset_client::OffsetClient, OffsetsRequest},
+    offsets::{offset_client::OffsetClient, offset_server::Offset, OffsetsRequest},
     primitives::{protected_write, ProtectionGuard, RtlMutex},
     util::to_wide,
 };
@@ -120,6 +121,32 @@ impl<'a> NtContext<'a> {
             ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
         });
         let response = client.get_offsets(request).await?.into_inner();
+        unsafe {
+            Ok(NtContext {
+                LdrpHashTable: RtlMutex::from_ref(
+                    &mut *(ntdll.offset(response.ldrp_hash_table as isize)
+                        as *mut [LIST_ENTRY; 32]),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
+                        as *mut RTL_SRWLOCK),
+                ),
+                LdrpHandleTlsData: std::mem::transmute(
+                    ntdll.offset(response.ldrp_handle_tls_data as isize),
+                ),
+            })
+        }
+    }
+
+    /// Resolves the context used by the mapper
+    ///
+    /// # Arguments
+    ///
+    /// `handler`: The local handler
+    pub async fn resolve_local(handler: &OffsetHandler) -> Result<NtContext<'a>, anyhow::Error> {
+        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        let request = tonic::Request::new(OffsetsRequest {
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
+        });
+        let response = handler.get_offsets(request).await?.into_inner();
         unsafe {
             Ok(NtContext {
                 LdrpHashTable: RtlMutex::from_ref(

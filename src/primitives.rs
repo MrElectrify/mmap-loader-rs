@@ -1,10 +1,9 @@
 use std::{
     cell::UnsafeCell,
+    io::Result,
     ffi::c_void,
     ops::{Deref, DerefMut},
 };
-
-use anyhow::Result;
 
 use ntapi::ntrtl::{RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive};
 use winapi::{
@@ -99,7 +98,7 @@ impl ProtectionGuard {
         let mut old_prot = 0;
         unsafe {
             match VirtualProtect(addr, size, prot, &mut old_prot) {
-                0 => Err(std::io::Error::last_os_error().into()),
+                0 => Err(std::io::Error::last_os_error()),
                 _ => Ok(ProtectionGuard {
                     addr,
                     size,

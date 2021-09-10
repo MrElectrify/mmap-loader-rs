@@ -1,10 +1,8 @@
-use anyhow::Result;
-
 use crate::{primitives::Handle, util::to_wide};
 
 use std::{
     ffi::c_void,
-    io::Error,
+    io::{Error, Result},
     ptr::{null, null_mut},
 };
 
@@ -114,7 +112,7 @@ impl MappedFile {
             )
             .into();
             if file.is_invalid() {
-                return Err(Error::last_os_error().into());
+                return Err(Error::last_os_error());
             }
             // create a file mapping
             let mapping: Handle = CreateFileMappingA(
@@ -127,12 +125,12 @@ impl MappedFile {
             )
             .into();
             if mapping.is_invalid() {
-                return Err(Error::last_os_error().into());
+                return Err(Error::last_os_error());
             }
             // actually map the file
             let contents = MapViewOfFile(mapping.handle, FILE_MAP_READ | FILE_MAP_EXECUTE, 0, 0, 0);
             if contents.is_null() {
-                return Err(Error::last_os_error().into());
+                return Err(Error::last_os_error());
             }
             Ok(Self {
                 file,
@@ -161,9 +159,7 @@ mod test {
     #[test]
     fn bad_file() {
         let err = MappedFile::load("badpath")
-            .unwrap_err()
-            .downcast::<Error>()
-            .unwrap();
+            .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 

@@ -9,7 +9,7 @@ path = "src/offset-server.rs"
 
 [profile.release]
 codegen-units = 1
-debug = false
+debug = true
 panic = "abort"
 lto = true
 

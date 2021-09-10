@@ -6,7 +6,6 @@ use crate::{
     primitives::{protected_write, ProtectionGuard, RtlMutex},
     util::to_wide,
 };
-use anyhow::Result;
 use log::{debug, error};
 use ntapi::{
     ntldr::{
@@ -113,7 +112,7 @@ impl<'a> NtContext<'a> {
     pub async fn resolve(
         server_hostname: &str,
         server_port: u16,
-    ) -> Result<NtContext<'a>, anyhow::Error> {
+    ) -> anyhow::Result<NtContext<'a>> {
         let mut client =
             OffsetClient::connect(format!("http://{}:{}", server_hostname, server_port)).await?;
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
@@ -141,7 +140,7 @@ impl<'a> NtContext<'a> {
     /// # Arguments
     ///
     /// `handler`: The local handler
-    pub async fn resolve_local(handler: &OffsetHandler) -> Result<NtContext<'a>, anyhow::Error> {
+    pub async fn resolve_local(handler: &OffsetHandler) -> anyhow::Result<NtContext<'a>> {
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
         let request = tonic::Request::new(OffsetsRequest {
             ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
@@ -188,7 +187,7 @@ pub struct PortableExecutable<'a> {
 impl<'a> PortableExecutable<'a> {
     /// Adds the module to the loader hash table, enabling functions like
     /// `GetModuleHandle` to work
-    fn add_to_hash_table(&mut self) -> Result<()> {
+    fn add_to_hash_table(&mut self) {
         // insert the entry into the hash table and other relevant structures
         unsafe {
             InsertTailList(
@@ -197,11 +196,10 @@ impl<'a> PortableExecutable<'a> {
                 &mut self.loader_entry.HashLinks,
             );
         }
-        Ok(())
     }
 
     /// Removes the module from the loader hash table
-    fn remove_from_hash_table(&mut self) -> Result<()> {
+    fn remove_from_hash_table(&mut self) {
         // remove hash table and linked list entries
         let mut hash_table = self.context.LdrpHashTable.lock();
         // find our entry
@@ -214,12 +212,10 @@ impl<'a> PortableExecutable<'a> {
                 unsafe {
                     RemoveEntryList(entry.as_mut().unwrap());
                 }
-                return Ok(());
             }
             entry = unsafe { (*entry).Flink };
         }
         debug!("Failed to find reference");
-        Ok(())
     }
 
     /// Calls the function entry point
@@ -236,7 +232,7 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Enables exception handling for the module
-    fn enable_exceptions(&mut self) -> Result<()> {
+    fn enable_exceptions(&mut self) -> Result<(), Error> {
         // get the exception table
         let exception_table = self.get_exception_table()?;
         if exception_table.is_empty() {
@@ -250,13 +246,13 @@ impl<'a> PortableExecutable<'a> {
                 self.file.contents() as u64,
             ) == false as u8
         } {
-            return Err(Error(Err::ExceptionTableEntry).into());
+            return Err(Error(Err::ExceptionTableEntry));
         }
         Ok(())
     }
 
     /// Disables exception handling for the module
-    fn disable_exceptions(&mut self) -> Result<()> {
+    fn disable_exceptions(&mut self) -> Result<(), Error> {
         // get the exception table
         let exception_table = self.get_exception_table()?;
         if exception_table.is_empty() {
@@ -264,7 +260,7 @@ impl<'a> PortableExecutable<'a> {
         }
         // remove the table from the process
         if unsafe { RtlDeleteFunctionTable(exception_table.as_mut_ptr()) == false as u8 } {
-            return Err(Error(Err::ExceptionTableEntry).into());
+            return Err(Error(Err::ExceptionTableEntry));
         }
         Ok(())
     }
@@ -274,7 +270,7 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `reason`: The reason for the call to the callbacks
-    fn execute_tls_callbacks(&mut self, reason: u32) -> Result<()> {
+    fn execute_tls_callbacks(&mut self, reason: u32) -> Result<(), Error> {
         let tls_directory =
             &self.nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS as usize];
         // navigate to the tls directory if it exists
@@ -305,18 +301,18 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Handle TLS data
-    fn handle_tls_data(&mut self) -> Result<()> {
+    fn handle_tls_data(&mut self) -> Result<(), Error> {
         if unsafe { (self.context.LdrpHandleTlsData)(self.loader_entry.as_mut().get_mut()) }
             != STATUS_SUCCESS
         {
-            Err(Error(Err::TLSData).into())
+            Err(Error(Err::TLSData))
         } else {
             Ok(())
         }
     }
 
     /// Gets the exception table for the module, and its size
-    fn get_exception_table(&mut self) -> Result<&'a mut [IMAGE_RUNTIME_FUNCTION_ENTRY]> {
+    fn get_exception_table(&mut self) -> Result<&'a mut [IMAGE_RUNTIME_FUNCTION_ENTRY], Error> {
         let exception_dir =
             &self.nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION as usize];
         if exception_dir.VirtualAddress == 0 {
@@ -336,7 +332,7 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Initializes the loader entry
-    fn init_ldr_entry(&mut self) -> Result<()> {
+    fn init_ldr_entry(&mut self) -> Result<(), Error> {
         self.loader_entry.DllBase = self.file.contents_mut();
         self.loader_entry.DdagNode = self.ddag_node.as_mut().get_mut();
         unsafe {
@@ -353,7 +349,7 @@ impl<'a> PortableExecutable<'a> {
                 &mut hash,
             ) != STATUS_SUCCESS
             {
-                return Err(Error(Err::LdrEntry).into());
+                return Err(Error(Err::LdrEntry));
             }
         }
         self.loader_entry.BaseNameHashValue = hash;
@@ -366,7 +362,7 @@ impl<'a> PortableExecutable<'a> {
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         // add to the loader hash table
-        self.add_to_hash_table()?;
+        self.add_to_hash_table();
         // store that we initialized the loader entry such that we can remove it
         self.ldr_entry_init = true;
         Ok(())
@@ -378,7 +374,7 @@ impl<'a> PortableExecutable<'a> {
     ///
     /// `path`: The path to the executable file
     /// `context`: The resolved Nt Context
-    pub fn load(path: &str, context: &'a NtContext<'a>) -> Result<PortableExecutable<'a>> {
+    pub fn load(path: &str, context: &'a NtContext<'a>) -> Result<PortableExecutable<'a>, anyhow::Error> {
         // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
@@ -467,7 +463,7 @@ impl<'a> PortableExecutable<'a> {
     fn load_entry_point(
         file: &mut MappedFile,
         nt_headers: &IMAGE_NT_HEADERS64,
-    ) -> Result<PLDR_INIT_ROUTINE> {
+    ) -> Result<PLDR_INIT_ROUTINE, Error> {
         let address_of_ep = nt_headers.OptionalHeader.AddressOfEntryPoint;
         if address_of_ep == 0 {
             // PEs can sometimes not have entry points
@@ -490,7 +486,7 @@ impl<'a> PortableExecutable<'a> {
     /// `file`: The mapped executable file
     fn load_headers(
         file: &mut MappedFile,
-    ) -> Result<(&'a IMAGE_NT_HEADERS64, &'a [IMAGE_SECTION_HEADER])> {
+    ) -> Result<(&'a IMAGE_NT_HEADERS64, &'a [IMAGE_SECTION_HEADER]), Error> {
         unsafe {
             let dos_header = &*file
                 .get_rva::<IMAGE_DOS_HEADER>(0)
@@ -502,7 +498,7 @@ impl<'a> PortableExecutable<'a> {
             if nt_headers.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64
                 || nt_headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
             {
-                return Err(Error(Err::UnsupportedArch).into());
+                return Err(Error(Err::UnsupportedArch));
             }
             // load section headers
             let section_headers = std::slice::from_raw_parts(
@@ -520,7 +516,7 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Protects all of the sections with their specified protections
-    fn protect_sections(&mut self) -> Result<()> {
+    fn protect_sections(&mut self) -> Result<(), anyhow::Error> {
         for &section in self.section_headers {
             unsafe {
                 self.section_protections.push(ProtectionGuard::new(
@@ -536,7 +532,7 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Resolves imports from the NT headers
-    fn resolve_imports(&mut self) -> Result<()> {
+    fn resolve_imports(&mut self) -> anyhow::Result<()> {
         unsafe {
             let iat_directory = &self.nt_headers.OptionalHeader.DataDirectory
                 [IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
@@ -566,7 +562,7 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `table`: The import descriptors
-    pub fn resolve_import_descriptors(&mut self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> Result<()> {
+    pub fn resolve_import_descriptors(&mut self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> anyhow::Result<()> {
         // we know the table is not null
         for &entry in table {
             // ignore empty entries
@@ -674,9 +670,7 @@ impl<'a> Drop for PortableExecutable<'a> {
         }
         // finally, remove ourselves from the hash table
         if self.ldr_entry_init {
-            if let Err(e) = self.remove_from_hash_table() {
-                error!("Failed to remove entry from hash table: {}", e.to_string())
-            }
+            self.remove_from_hash_table();
         }
     }
 }

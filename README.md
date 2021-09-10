@@ -3,11 +3,15 @@ A Windows Portable Executable Manual Map Loader that supports both executable an
 
 ## Features
 - Supports both DLL and EXE types
+- Remote or local PDB server for parsing out internal Windows functions
 - Supports C++ exceptions, vectored exception handling, and structured exception handling
 - Adds the entry to the loader structures, allowing support for functions such as `GetModuleHandle`
 - MSVC recognizes mapped executables and debugging of children is fully supported with symbols
 - Supports lazy execution, where multiple PE files can be loaded before any are executed
 - Returns control flow to the calling function after execution is complete
+
+## Support
+Let me know if something doesn't work by opening an issue. It has only been tested on Windows 10 20H2, and likely won't work on Windows 7 and prior. To see if it works on your system, run `cargo test`
 
 ## Known Limitations
 - 32-bit is not fully supported (but is an easy fix)

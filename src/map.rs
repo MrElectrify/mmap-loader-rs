@@ -158,8 +158,7 @@ mod test {
 
     #[test]
     fn bad_file() {
-        let err = MappedFile::load("badpath")
-            .unwrap_err();
+        let err = MappedFile::load("badpath").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 

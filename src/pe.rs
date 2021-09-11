@@ -109,10 +109,7 @@ impl<'a> NtContext<'a> {
     ///
     /// `server_hostname`: The hostname of the endpoint of the PDB server
     /// `server_port`: The port of the endpoint of the PDB server
-    pub async fn resolve(
-        server_hostname: &str,
-        server_port: u16,
-    ) -> anyhow::Result<NtContext<'a>> {
+    pub async fn resolve(server_hostname: &str, server_port: u16) -> anyhow::Result<NtContext<'a>> {
         let mut client =
             OffsetClient::connect(format!("http://{}:{}", server_hostname, server_port)).await?;
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
@@ -374,7 +371,10 @@ impl<'a> PortableExecutable<'a> {
     ///
     /// `path`: The path to the executable file
     /// `context`: The resolved Nt Context
-    pub fn load(path: &str, context: &'a NtContext<'a>) -> Result<PortableExecutable<'a>, anyhow::Error> {
+    pub fn load(
+        path: &str,
+        context: &'a NtContext<'a>,
+    ) -> Result<PortableExecutable<'a>, anyhow::Error> {
         // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
@@ -562,7 +562,10 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `table`: The import descriptors
-    pub fn resolve_import_descriptors(&mut self, table: &[IMAGE_IMPORT_DESCRIPTOR]) -> anyhow::Result<()> {
+    pub fn resolve_import_descriptors(
+        &mut self,
+        table: &[IMAGE_IMPORT_DESCRIPTOR],
+    ) -> anyhow::Result<()> {
         // we know the table is not null
         for &entry in table {
             // ignore empty entries

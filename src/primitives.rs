@@ -1,7 +1,7 @@
 use std::{
     cell::UnsafeCell,
-    io::Result,
     ffi::c_void,
+    io::Result,
     ops::{Deref, DerefMut},
 };
 

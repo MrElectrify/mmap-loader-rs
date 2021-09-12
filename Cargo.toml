@@ -39,7 +39,7 @@ tonic-build = "0.5"
 anyhow = "1"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
-ntapi = "0.3"
+ntapi = { version = "0.3", features = ["nightly"] }
 pdb = "0.7"
 prost = "0.8"
 reqwest = "0.11"

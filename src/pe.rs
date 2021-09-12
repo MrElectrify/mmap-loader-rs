@@ -12,6 +12,7 @@ use ntapi::{
         LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
         LDRP_CSLIST, LDR_DATA_TABLE_ENTRY, LDR_DDAG_NODE, LDR_DDAG_STATE, PLDR_INIT_ROUTINE,
     },
+    ntpsapi::NtCurrentPeb,
     ntrtl::{
         InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlInitUnicodeString,
         HASH_STRING_ALGORITHM_DEFAULT,
@@ -24,16 +25,10 @@ use std::{
     ptr,
     ptr::null_mut,
 };
-use winapi::{
-    shared::{
-        guiddef::GUID,
-        ntdef::{
+use winapi::{shared::{guiddef::GUID, minwindef::HMODULE, ntdef::{
             LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
             UNICODE_STRING,
-        },
-        ntstatus::STATUS_SUCCESS,
-    },
-    um::{
+        }, ntstatus::STATUS_SUCCESS}, um::{
         libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
         winnt::{
             RtlAddFunctionTable, RtlDeleteFunctionTable, DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH,
@@ -46,8 +41,7 @@ use winapi::{
             IMAGE_TLS_DIRECTORY, PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE, PVOID,
             RTL_SRWLOCK,
         },
-    },
-};
+    }};
 
 /// The context of Nt functions and statics
 #[allow(non_snake_case)]
@@ -167,6 +161,24 @@ struct IMAGE_DEBUG_CODEVIEW {
     age: u32,
 }
 
+/// Sets the image as the primary image. Useful
+/// if you want `GetModuleHandle(null)` to return
+/// the handle to the mapped image. Returns the
+/// previous primary image base. The caller must ensure
+/// that the module is valid while the primary image is
+/// set, and must restore the old image base before it goes out
+/// of scope
+///
+/// # Arguments
+///
+/// `image_base`: The base address of the image
+pub unsafe fn set_as_primary_image(image_base: PVOID) -> PVOID {
+    let peb = NtCurrentPeb();
+    let old_base = (*peb).ImageBaseAddress;
+    (*peb).ImageBaseAddress = image_base;
+    return old_base;
+}
+
 pub struct PortableExecutable<'a> {
     file: MappedFile,
     file_name: Vec<u16>,
@@ -179,6 +191,7 @@ pub struct PortableExecutable<'a> {
     ddag_node: Pin<Box<LDR_DDAG_NODE>>,
     context: &'a NtContext<'a>,
     ldr_entry_init: bool,
+    last_primary: Option<PVOID>,
 }
 
 impl<'a> PortableExecutable<'a> {
@@ -445,6 +458,7 @@ impl<'a> PortableExecutable<'a> {
             }),
             context,
             ldr_entry_init: false,
+            last_primary: None,
         };
         pe.init_ldr_entry()?;
         pe.resolve_imports()?;
@@ -515,6 +529,11 @@ impl<'a> PortableExecutable<'a> {
         }
     }
 
+    /// Returns the handle for the loaded process
+    pub fn module_handle(&mut self) -> HMODULE {
+        self.file.contents() as HMODULE
+    }
+    
     /// Protects all of the sections with their specified protections
     fn protect_sections(&mut self) -> Result<(), anyhow::Error> {
         for &section in self.section_headers {
@@ -656,6 +675,16 @@ impl<'a> PortableExecutable<'a> {
             PAGE_READONLY
         }
     }
+
+    /// Sets this mapped image as the primary image,
+    /// as if by calling `set_as_primary_image(self.module_handle())`.
+    /// Restores the primary image after the destruction of this image
+    pub fn set_self_as_primary_image(&mut self) {
+        if let Some(_) = self.last_primary {
+            return;
+        }
+        self.last_primary = Some(unsafe { set_as_primary_image(self.module_handle() as *mut c_void) });
+    }
 }
 
 impl<'a> Drop for PortableExecutable<'a> {
@@ -671,9 +700,13 @@ impl<'a> Drop for PortableExecutable<'a> {
         if let Err(e) = self.disable_exceptions() {
             error!("Failed to disable exceptions: {}", e.to_string())
         }
-        // finally, remove ourselves from the hash table
+        // remove ourselves from the hash table
         if self.ldr_entry_init {
             self.remove_from_hash_table();
+        }
+        // ensure we are not the primary image anymore
+        if let Some(last_image) = self.last_primary {
+            unsafe { set_as_primary_image(last_image) };
         }
     }
 }
@@ -686,6 +719,7 @@ mod test {
     use serial_test::serial;
     use std::{
         net::{IpAddr, Ipv4Addr, SocketAddr},
+        ptr::null,
         sync::Once,
         thread,
     };
@@ -820,5 +854,19 @@ mod test {
         unsafe {
             assert_eq!(image.run(), 7);
         }
+    }
+
+    #[test]
+    #[serial]
+    fn primary_image() {
+        setup();
+        let original_handle = unsafe{ GetModuleHandleW(null()) };
+        {
+            let mut image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
+            assert_ne!(image.module_handle(), unsafe { GetModuleHandleW(null()) });
+            image.set_self_as_primary_image();
+            assert_eq!(image.module_handle(), unsafe { GetModuleHandleW(null()) });
+        }
+        assert_eq!(original_handle, unsafe { GetModuleHandleW(null()) });
     }
 }

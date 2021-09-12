@@ -11,6 +11,7 @@ pub struct Offsets {
     pub ldrp_hash_table: u32,
     pub ldrp_module_datatable_lock: u32,
     pub ldrp_handle_tls_data: u32,
+    pub ldrp_release_tls_entry: u32
 }
 
 impl From<OffsetsResponse> for Offsets {
@@ -19,6 +20,7 @@ impl From<OffsetsResponse> for Offsets {
             ldrp_hash_table: off.ldrp_hash_table,
             ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
             ldrp_handle_tls_data: off.ldrp_handle_tls_data,
+            ldrp_release_tls_entry: off.ldrp_release_tls_entry,
         }
     }
 }
@@ -29,6 +31,7 @@ impl From<&Offsets> for OffsetsResponse {
             ldrp_hash_table: off.ldrp_hash_table,
             ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
             ldrp_handle_tls_data: off.ldrp_handle_tls_data,
+            ldrp_release_tls_entry: off.ldrp_release_tls_entry,
         }
     }
 }
@@ -39,6 +42,7 @@ impl From<Offsets> for OffsetsResponse {
             ldrp_hash_table: off.ldrp_hash_table,
             ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
             ldrp_handle_tls_data: off.ldrp_handle_tls_data,
+            ldrp_release_tls_entry: off.ldrp_release_tls_entry,
         }
     }
 }
@@ -98,10 +102,12 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
     let ldrp_hash_table = *get_offset!(map, "LdrpHashTable");
     let ldrp_module_datatable_lock = *get_offset!(map, "LdrpModuleDatatableLock");
     let ldrp_handle_tls_data = *get_offset!(map, "LdrpHandleTlsData");
+    let ldrp_release_tls_entry = *get_offset!(map, "LdrpReleaseTlsEntry");
     Ok(Some(Offsets {
         ldrp_hash_table,
         ldrp_module_datatable_lock,
         ldrp_handle_tls_data,
+        ldrp_release_tls_entry,
     }))
 }
 

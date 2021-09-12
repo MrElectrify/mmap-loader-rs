@@ -6,7 +6,7 @@ use crate::{
     primitives::{protected_write, ProtectionGuard, RtlMutex},
     util::to_wide,
 };
-use log::{debug, error};
+use log::debug;
 use ntapi::{
     ntldr::{
         LDR_DATA_TABLE_ENTRY_u1, LDR_DATA_TABLE_ENTRY_u2, LDR_DDAG_NODE_u, LdrModulesReadyToRun,
@@ -48,6 +48,7 @@ use winapi::{shared::{guiddef::GUID, minwindef::HMODULE, ntdef::{
 pub struct NtContext<'a> {
     LdrpHashTable: RtlMutex<'a, [LIST_ENTRY; 32]>,
     LdrpHandleTlsData: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY) -> i32,
+    LdrpReleaseTlsEntry: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY, null: usize) -> i32,
 }
 
 impl<'a> NtContext<'a> {
@@ -122,6 +123,9 @@ impl<'a> NtContext<'a> {
                 LdrpHandleTlsData: std::mem::transmute(
                     ntdll.offset(response.ldrp_handle_tls_data as isize),
                 ),
+                LdrpReleaseTlsEntry: std::mem::transmute(
+                    ntdll.offset(response.ldrp_release_tls_entry as isize)
+                )
             })
         }
     }
@@ -148,6 +152,9 @@ impl<'a> NtContext<'a> {
                 LdrpHandleTlsData: std::mem::transmute(
                     ntdll.offset(response.ldrp_handle_tls_data as isize),
                 ),
+                LdrpReleaseTlsEntry: std::mem::transmute(
+                    ntdll.offset(response.ldrp_release_tls_entry as isize)
+                )
             })
         }
     }
@@ -308,6 +315,17 @@ impl<'a> PortableExecutable<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Frees all TLS data
+    fn free_tls_data(&mut self) -> Result<(), Error> {
+        if unsafe { (self.context.LdrpReleaseTlsEntry)(self.loader_entry.as_mut().get_mut(), 0) }
+            != STATUS_SUCCESS
+        {
+            Err(Error(Err::TLSData))
+        } else {
+            Ok(())
+        }
     }
 
     /// Handle TLS data
@@ -692,17 +710,21 @@ impl<'a> Drop for PortableExecutable<'a> {
     fn drop(&mut self) {
         // call each tls callback with process_detach
         if let Err(e) = self.execute_tls_callbacks(DLL_PROCESS_DETACH) {
-            error!("Failed to execute TLS callbacks on exit: {}", e.to_string())
+            debug!("Failed to execute TLS callbacks on exit: {}", e.to_string())
         };
         // call the entry point with detach
         self.call_entry_point(DLL_PROCESS_DETACH);
         // disable exceptions afterwards in case a TLS callback uses them
         if let Err(e) = self.disable_exceptions() {
-            error!("Failed to disable exceptions: {}", e.to_string())
+            debug!("Failed to disable exceptions: {}", e.to_string())
         }
         // remove ourselves from the hash table
         if self.ldr_entry_init {
             self.remove_from_hash_table();
+        }
+        // free TLS data
+        if let Err(e) = self.free_tls_data() {
+            debug!("Failed to free TLS data: {}", e.to_string())
         }
         // ensure we are not the primary image anymore
         if let Some(last_image) = self.last_primary {

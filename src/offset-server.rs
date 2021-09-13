@@ -1,6 +1,6 @@
 #![feature(option_result_contains)]
 
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{env, net::SocketAddr};
 
 use mmap_loader::server::Server;
 use tonic::transport::Identity;
@@ -43,7 +43,7 @@ async fn main() {
     };
     let server = Server::new(
         SocketAddr::new(addr, port),
-        PathBuf::from(cache_path),
+        cache_path,
         tls_identity,
     )
     .expect("Failed to start server");

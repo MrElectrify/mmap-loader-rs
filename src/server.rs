@@ -1,5 +1,5 @@
 use crate::{db::OffsetHandler, offsets::offset_server::OffsetServer};
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr};
 use tonic::{
     transport,
     transport::{Identity, ServerTlsConfig},
@@ -24,13 +24,13 @@ impl Server {
     ///
     /// `tls_identity`: The TLS identity. If this is specified, TLS will be used with
     /// the given certificate and private key
-    pub fn new(
+    pub fn new<S: AsRef<str>>(
         endpoint: SocketAddr,
-        cache_path: PathBuf,
+        cache_path: S,
         tls_identity: Option<Identity>,
     ) -> Result<Server, anyhow::Error> {
         Ok(Server {
-            handler: OffsetHandler::new(cache_path)?,
+            handler: OffsetHandler::new(cache_path.as_ref().into())?,
             endpoint,
             tls_identity,
         })
@@ -60,7 +60,7 @@ mod test {
     #[tokio::test]
     async fn hash_length() {
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json".into();
+        let cache_path = "test/cache.json";
         let server = Server::new(endpoint, cache_path, None).unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "123".into(),
@@ -73,7 +73,7 @@ mod test {
     #[tokio::test]
     async fn hash_digits() {
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json".into();
+        let cache_path = "test/cache.json";
         let server = Server::new(endpoint, cache_path, None).unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201AG".into(),
@@ -86,7 +86,7 @@ mod test {
     #[tokio::test]
     async fn not_found() {
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json".into();
+        let cache_path = "test/cache.json";
         let server = Server::new(endpoint, cache_path, None).unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A2".into(),
@@ -98,7 +98,7 @@ mod test {
     #[tokio::test]
     async fn good_fetch() {
         let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json".into();
+        let cache_path = "test/cache.json";
         let server = Server::new(endpoint, cache_path, None).unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A1".into(),

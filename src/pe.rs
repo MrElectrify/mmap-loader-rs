@@ -885,12 +885,8 @@ mod test {
     use crate::server::Server;
     use lazy_static::lazy_static;
     use serial_test::serial;
-    use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr},
-        ptr::null,
-        sync::Once,
-        thread,
-    };
+    use tonic::transport::Identity;
+    use std::{net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4}, ptr::null, sync::Once, thread};
     use tokio::runtime::Runtime;
     use winapi::{
         shared::winerror::{ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND},
@@ -910,7 +906,7 @@ mod test {
         INIT.call_once(|| {
             let server = Server::new(
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 42221),
-                "test/cache.json".into(),
+                "test/cache.json",
                 None,
             )
             .unwrap();
@@ -1057,5 +1053,23 @@ mod test {
             assert_eq!(image.module_handle(), unsafe { GetModuleHandleW(null()) });
         }
         assert_eq!(original_handle, unsafe { GetModuleHandleW(null()) });
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn tls_server() {
+        // start the server
+        let endpoint = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 44443));
+        let cert = tokio::fs::read("test/server.pem").await.unwrap();
+        let key = tokio::fs::read("test/server.key").await.unwrap();
+        let identity = Identity::from_pem(cert, key);
+        let server = Server::new(endpoint, "test/tls_cache.json", Some(identity)).unwrap();
+        // resolve
+        let ca_cert = tokio::fs::read("test/ca.pem").await.unwrap();
+        let ca_cert = Certificate::from_pem(ca_cert);
+        tokio::select!{
+            _ = server.run() => {},
+            _ = NtContext::resolve_tls("localhost", 44443, Some(ca_cert), None) => {}
+        };
     }
 }

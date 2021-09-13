@@ -53,7 +53,7 @@ serde_derive = "1.0"
 serde_json = "1.0"
 simple_logger = { version = "1.1" }
 tokio = { version = "1.0", features = ["fs", "macros", "rt-multi-thread"] }
-tonic = {version = "0.5", features = ["tls", "tls-webpki-roots"] }
+tonic = {version = "0.5", features = ["tls", "tls-roots"] }
 winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "handleapi", "memoryapi", "std", "winbase"] }
 
 [dev-dependencies]

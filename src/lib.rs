@@ -1,12 +1,12 @@
 pub mod db;
 pub mod error;
-#[cfg(any(windows, doc))]
+#[cfg(target_os = "windows")]
 mod map;
 mod offsets;
-#[cfg(any(windows, doc))]
+#[cfg(target_os = "windows")]
 pub mod pe;
-#[cfg(any(windows, doc))]
+#[cfg(target_os = "windows")]
 mod primitives;
 pub mod server;
-#[cfg(any(windows, doc))]
+#[cfg(target_os = "windows")]
 mod util;

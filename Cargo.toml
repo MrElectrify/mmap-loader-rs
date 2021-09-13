@@ -25,6 +25,10 @@ name = "print_return"
 path = "examples/print_return.rs"
 
 [[example]]
+name = "print_return_tls"
+path = "examples/print_return_tls.rs"
+
+[[example]]
 name = "print_return_with_dll"
 path = "examples/print_return_with_dll.rs"
 
@@ -49,7 +53,7 @@ serde_derive = "1.0"
 serde_json = "1.0"
 simple_logger = { version = "1.1" }
 tokio = { version = "1.0", features = ["fs", "macros", "rt-multi-thread"] }
-tonic = "0.5"
+tonic = {version = "0.5", features = ["tls"] }
 winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "handleapi", "memoryapi", "std", "winbase"] }
 
 [dev-dependencies]

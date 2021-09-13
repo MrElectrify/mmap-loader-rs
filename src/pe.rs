@@ -25,6 +25,7 @@ use std::{
     ptr,
     ptr::null_mut,
 };
+use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 use winapi::{
     shared::{
         guiddef::GUID,
@@ -113,10 +114,29 @@ impl<'a> NtContext<'a> {
     /// # Arguments
     ///
     /// `server_hostname`: The hostname of the endpoint of the PDB server
+    ///
     /// `server_port`: The port of the endpoint of the PDB server
-    pub async fn resolve(server_hostname: &str, server_port: u16) -> anyhow::Result<NtContext<'a>> {
-        let mut client =
-            OffsetClient::connect(format!("http://{}:{}", server_hostname, server_port)).await?;
+    ///
+    /// `tls_info`: The certificate authority file, and optional expected domain
+    pub async fn resolve<S: AsRef<str>>(
+        server_hostname: S,
+        server_port: u16,
+        tls_info: Option<(Certificate, Option<S>)>,
+    ) -> anyhow::Result<NtContext<'a>> {
+        let mut channel = Channel::from_shared(format!(
+            "http://{}:{}",
+            server_hostname.as_ref(),
+            server_port
+        ))?;
+        // create the SSL context
+        if let Some((cert, domain)) = tls_info {
+            let mut tls = ClientTlsConfig::new().ca_certificate(cert);
+            if let Some(domain) = domain {
+                tls = tls.domain_name(domain.as_ref());
+            }
+            channel = channel.tls_config(tls)?;
+        }
+        let mut client = OffsetClient::new(channel.connect().await?);
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
         let request = tonic::Request::new(OffsetsRequest {
             ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
@@ -213,7 +233,7 @@ struct IMAGE_DEBUG_CODEVIEW {
 /// # Arguments
 ///
 /// `image_base`: The base address of the image
-pub unsafe fn set_as_primary_image(image_base: PVOID) -> PVOID {
+unsafe fn set_as_primary_image(image_base: PVOID) -> PVOID {
     let peb = NtCurrentPeb();
     let old_base = (*peb).ImageBaseAddress;
     (*peb).ImageBaseAddress = image_base;
@@ -867,7 +887,7 @@ mod test {
     lazy_static! {
         static ref NT_CONTEXT: NtContext<'static> = Runtime::new()
             .unwrap()
-            .block_on(NtContext::resolve("localhost", 42221))
+            .block_on(NtContext::resolve("localhost", 42221, None))
             .unwrap();
     }
 
@@ -876,6 +896,7 @@ mod test {
             let server = Server::new(
                 SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 42221),
                 "test/cache.json".into(),
+                None,
             )
             .unwrap();
             thread::spawn(move || {

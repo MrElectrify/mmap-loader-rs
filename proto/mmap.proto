@@ -14,4 +14,6 @@ message OffsetsResponse {
     uint32 LdrpModuleDatatableLock = 2; 
     uint32 LdrpHandleTlsData = 3;
     uint32 LdrpReleaseTlsEntry = 4;
+    uint32 LdrpMappingInfoIndex = 5;
+    uint32 LdrpModuleBaseAddressIndex = 6;
 }

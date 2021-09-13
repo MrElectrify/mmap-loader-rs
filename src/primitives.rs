@@ -3,17 +3,89 @@ use std::{
     ffi::c_void,
     io::Result,
     ops::{Deref, DerefMut},
+    ptr::null_mut,
 };
 
-use ntapi::ntrtl::{RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive};
+use ntapi::ntrtl::{
+    RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
+};
 use winapi::{
-    shared::minwindef::DWORD,
+    shared::{minwindef::DWORD, ntdef::PRTL_BALANCED_NODE},
     um::{
         handleapi::CloseHandle,
         memoryapi::VirtualProtect,
         winnt::{HANDLE, PAGE_READWRITE, RTL_SRWLOCK},
     },
 };
+
+/// Insert a node into a red-black tree
+///
+/// # Arguments
+///
+/// `tree`: The tree that is being operated on
+/// `node`: The node to insert
+/// `compare`: The function that returns true if the first node is *less* than the second node
+pub unsafe fn rtl_rb_tree_insert<F: Fn(PRTL_BALANCED_NODE, PRTL_BALANCED_NODE) -> bool>(
+    tree: &mut RTL_RB_TREE,
+    node: PRTL_BALANCED_NODE,
+    compare: F,
+) {
+    // find the node and position to insert
+    let (parent, right) = rtl_rb_tree_find_insert_location(tree, node, compare);
+    RtlRbInsertNodeEx(tree, parent, right as u8, node);
+}
+
+/// Accesses a node based on the encoding mode
+///
+/// # Arguments
+///
+/// `tree`: The tree that the node is part of
+/// `node`: The node that is attempting to be accessed.
+/// The pointer to pointer must not be null
+unsafe fn rtl_rb_tree_access_node(
+    tree: &mut RTL_RB_TREE,
+    node: *const PRTL_BALANCED_NODE,
+) -> PRTL_BALANCED_NODE {
+    if (tree.Min as u64 & 1) != 0 {
+        if (*node).is_null() {
+            return null_mut();
+        }
+        // it is xor-encoded in relation to its address
+        (node as u64 ^ (*node) as u64) as PRTL_BALANCED_NODE
+    } else {
+        *node
+    }
+}
+
+unsafe fn rtl_rb_tree_find_insert_location<
+    F: Fn(PRTL_BALANCED_NODE, PRTL_BALANCED_NODE) -> bool,
+>(
+    tree: &mut RTL_RB_TREE,
+    node: PRTL_BALANCED_NODE,
+    compare: F,
+) -> (PRTL_BALANCED_NODE, bool) {
+    let mut cur_node = rtl_rb_tree_access_node(tree, &tree.Root);
+    let mut next_node;
+    let mut right = false;
+    while !cur_node.is_null() {
+        if compare(node, cur_node) {
+            // the node is less, and goes left
+            next_node = rtl_rb_tree_access_node(tree, &(*cur_node).u.s().Left);
+            if next_node.is_null() {
+                right = false;
+                break;
+            }
+        } else {
+            next_node = rtl_rb_tree_access_node(tree, &(*cur_node).u.s().Right);
+            if next_node.is_null() {
+                right = true;
+                break;
+            }
+        }
+        cur_node = next_node;
+    }
+    (cur_node, right)
+}
 
 /// A raw HANDLE that is closed when dropped
 #[derive(Debug)]

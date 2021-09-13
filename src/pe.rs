@@ -3,7 +3,7 @@ use crate::{
     error::{Err, Error},
     map::MappedFile,
     offsets::{offset_client::OffsetClient, offset_server::Offset, OffsetsRequest},
-    primitives::{protected_write, ProtectionGuard, RtlMutex},
+    primitives::{protected_write, rtl_rb_tree_insert, ProtectionGuard, RtlMutex},
     util::to_wide,
 };
 use log::debug;
@@ -15,7 +15,7 @@ use ntapi::{
     ntpsapi::NtCurrentPeb,
     ntrtl::{
         InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlInitUnicodeString,
-        HASH_STRING_ALGORITHM_DEFAULT,
+        RtlRbRemoveNode, HASH_STRING_ALGORITHM_DEFAULT, RTL_RB_TREE,
     },
 };
 use std::{
@@ -25,10 +25,17 @@ use std::{
     ptr,
     ptr::null_mut,
 };
-use winapi::{shared::{guiddef::GUID, minwindef::HMODULE, ntdef::{
+use winapi::{
+    shared::{
+        guiddef::GUID,
+        minwindef::HMODULE,
+        ntdef::{
             LARGE_INTEGER, LIST_ENTRY, RTL_BALANCED_NODE, SINGLE_LIST_ENTRY, ULONGLONG,
             UNICODE_STRING,
-        }, ntstatus::STATUS_SUCCESS}, um::{
+        },
+        ntstatus::STATUS_SUCCESS,
+    },
+    um::{
         libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
         winnt::{
             RtlAddFunctionTable, RtlDeleteFunctionTable, DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH,
@@ -41,7 +48,8 @@ use winapi::{shared::{guiddef::GUID, minwindef::HMODULE, ntdef::{
             IMAGE_TLS_DIRECTORY, PAGE_EXECUTE_READ, PAGE_READONLY, PAGE_READWRITE, PVOID,
             RTL_SRWLOCK,
         },
-    }};
+    },
+};
 
 /// The context of Nt functions and statics
 #[allow(non_snake_case)]
@@ -49,6 +57,8 @@ pub struct NtContext<'a> {
     LdrpHashTable: RtlMutex<'a, [LIST_ENTRY; 32]>,
     LdrpHandleTlsData: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY) -> i32,
     LdrpReleaseTlsEntry: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY, null: usize) -> i32,
+    LdrpMappingInfoIndex: RtlMutex<'a, RTL_RB_TREE>,
+    LdrpModuleBaseAddressIndex: RtlMutex<'a, RTL_RB_TREE>,
 }
 
 impl<'a> NtContext<'a> {
@@ -124,8 +134,20 @@ impl<'a> NtContext<'a> {
                     ntdll.offset(response.ldrp_handle_tls_data as isize),
                 ),
                 LdrpReleaseTlsEntry: std::mem::transmute(
-                    ntdll.offset(response.ldrp_release_tls_entry as isize)
-                )
+                    ntdll.offset(response.ldrp_release_tls_entry as isize),
+                ),
+                LdrpMappingInfoIndex: RtlMutex::from_ref(
+                    &mut *(ntdll.offset(response.ldrp_mapping_info_index as isize)
+                        as *mut RTL_RB_TREE),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
+                        as *mut RTL_SRWLOCK),
+                ),
+                LdrpModuleBaseAddressIndex: RtlMutex::from_ref(
+                    &mut *(ntdll.offset(response.ldrp_module_base_address_index as isize)
+                        as *mut RTL_RB_TREE),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
+                        as *mut RTL_SRWLOCK),
+                ),
             })
         }
     }
@@ -153,8 +175,20 @@ impl<'a> NtContext<'a> {
                     ntdll.offset(response.ldrp_handle_tls_data as isize),
                 ),
                 LdrpReleaseTlsEntry: std::mem::transmute(
-                    ntdll.offset(response.ldrp_release_tls_entry as isize)
-                )
+                    ntdll.offset(response.ldrp_release_tls_entry as isize),
+                ),
+                LdrpMappingInfoIndex: RtlMutex::from_ref(
+                    &mut *(ntdll.offset(response.ldrp_mapping_info_index as isize)
+                        as *mut RTL_RB_TREE),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
+                        as *mut RTL_SRWLOCK),
+                ),
+                LdrpModuleBaseAddressIndex: RtlMutex::from_ref(
+                    &mut *(ntdll.offset(response.ldrp_module_base_address_index as isize)
+                        as *mut RTL_RB_TREE),
+                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
+                        as *mut RTL_SRWLOCK),
+                ),
             })
         }
     }
@@ -183,7 +217,7 @@ pub unsafe fn set_as_primary_image(image_base: PVOID) -> PVOID {
     let peb = NtCurrentPeb();
     let old_base = (*peb).ImageBaseAddress;
     (*peb).ImageBaseAddress = image_base;
-    return old_base;
+    old_base
 }
 
 pub struct PortableExecutable<'a> {
@@ -197,8 +231,15 @@ pub struct PortableExecutable<'a> {
     loader_entry: Pin<Box<LDR_DATA_TABLE_ENTRY>>,
     ddag_node: Pin<Box<LDR_DDAG_NODE>>,
     context: &'a NtContext<'a>,
-    ldr_entry_init: bool,
+    added_to_hash_tbl: bool,
+    added_to_index: bool,
     last_primary: Option<PVOID>,
+}
+
+macro_rules! from_field_mut {
+    ($parent: path, $field: tt, $field_ptr: expr) => {
+        ($field_ptr as usize - memoffset::offset_of!($parent, $field)) as *mut $parent
+    };
 }
 
 impl<'a> PortableExecutable<'a> {
@@ -212,6 +253,7 @@ impl<'a> PortableExecutable<'a> {
                     [(self.loader_entry.BaseNameHashValue & 0x1f) as usize],
                 &mut self.loader_entry.HashLinks,
             );
+            self.added_to_hash_tbl = true;
         }
     }
 
@@ -233,6 +275,50 @@ impl<'a> PortableExecutable<'a> {
             entry = unsafe { (*entry).Flink };
         }
         debug!("Failed to find reference");
+    }
+
+    /// Adds the module to the index red-black trees
+    fn add_to_index(&mut self) {
+        // add it to the mapping information table
+        unsafe {
+            rtl_rb_tree_insert(
+                &mut self.context.LdrpMappingInfoIndex.lock(),
+                &mut self.loader_entry.MappingInfoIndexNode,
+                |l, r| {
+                    let l = from_field_mut!(LDR_DATA_TABLE_ENTRY, MappingInfoIndexNode, l);
+                    let r = from_field_mut!(LDR_DATA_TABLE_ENTRY, MappingInfoIndexNode, r);
+                    (*l).TimeDateStamp < (*r).TimeDateStamp
+                        || ((*l).TimeDateStamp <= (*r).TimeDateStamp
+                            && (*l).SizeOfImage < (*r).SizeOfImage)
+                },
+            )
+        }
+        unsafe {
+            rtl_rb_tree_insert(
+                &mut self.context.LdrpModuleBaseAddressIndex.lock(),
+                &mut self.loader_entry.BaseAddressIndexNode,
+                |l, r| {
+                    let l = from_field_mut!(LDR_DATA_TABLE_ENTRY, BaseAddressIndexNode, l);
+                    let r = from_field_mut!(LDR_DATA_TABLE_ENTRY, BaseAddressIndexNode, r);
+                    (*l).DllBase < (*r).DllBase
+                },
+            )
+        }
+        self.added_to_index = true;
+    }
+
+    /// Removes the module from the index red-black trees
+    fn remove_from_index(&mut self) {
+        unsafe {
+            RtlRbRemoveNode(
+                &mut (*self.context.LdrpMappingInfoIndex.lock()),
+                &mut self.loader_entry.MappingInfoIndexNode,
+            );
+            RtlRbRemoveNode(
+                &mut (*self.context.LdrpModuleBaseAddressIndex.lock()),
+                &mut self.loader_entry.BaseAddressIndexNode,
+            );
+        }
     }
 
     /// Calls the function entry point
@@ -386,13 +472,14 @@ impl<'a> PortableExecutable<'a> {
             self.loader_entry.u2.set_ProcessStaticImport(1);
         }
         // add the executable size
+        self.loader_entry.TimeDateStamp = self.nt_headers.FileHeader.TimeDateStamp;
         self.loader_entry.SizeOfImage = self.nt_headers.OptionalHeader.SizeOfImage;
         self.ddag_node.State = LdrModulesReadyToRun;
         self.ddag_node.LoadCount = u32::MAX;
         // add to the loader hash table
         self.add_to_hash_table();
-        // store that we initialized the loader entry such that we can remove it
-        self.ldr_entry_init = true;
+        // add to the red-black trees for traversal
+        self.add_to_index();
         Ok(())
     }
 
@@ -401,10 +488,29 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `path`: The path to the executable file
+    ///
     /// `context`: The resolved Nt Context
     pub fn load(
         path: &str,
         context: &'a NtContext<'a>,
+    ) -> Result<PortableExecutable<'a>, anyhow::Error> {
+        PortableExecutable::load_as_primary(path, context, false)
+    }
+
+    /// Loads the portable executable, processing any options
+    ///
+    /// # Arguments
+    ///
+    /// `path`: The path to the executable file
+    ///
+    /// `context`: The resolved Nt Context
+    ///
+    /// `primary`: Whether or not this module should be the primary
+    /// module, and be returned upon invocation of `GetModuleHandle(null)`
+    pub fn load_as_primary(
+        path: &str,
+        context: &'a NtContext<'a>,
+        primary: bool,
     ) -> Result<PortableExecutable<'a>, anyhow::Error> {
         // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
@@ -475,13 +581,17 @@ impl<'a> PortableExecutable<'a> {
                 PreorderNumber: 0,
             }),
             context,
-            ldr_entry_init: false,
+            added_to_hash_tbl: false,
+            added_to_index: false,
             last_primary: None,
         };
         pe.init_ldr_entry()?;
         pe.resolve_imports()?;
         pe.protect_sections()?;
         pe.enable_exceptions()?;
+        if primary {
+            pe.set_self_as_primary_image();
+        }
         pe.execute_tls_callbacks(DLL_PROCESS_ATTACH)?;
         pe.handle_tls_data()?;
         Ok(pe)
@@ -551,7 +661,7 @@ impl<'a> PortableExecutable<'a> {
     pub fn module_handle(&mut self) -> HMODULE {
         self.file.contents() as HMODULE
     }
-    
+
     /// Protects all of the sections with their specified protections
     fn protect_sections(&mut self) -> Result<(), anyhow::Error> {
         for &section in self.section_headers {
@@ -696,12 +806,9 @@ impl<'a> PortableExecutable<'a> {
 
     /// Sets this mapped image as the primary image,
     /// as if by calling `set_as_primary_image(self.module_handle())`.
-    /// Restores the primary image after the destruction of this image
-    pub fn set_self_as_primary_image(&mut self) {
-        if let Some(_) = self.last_primary {
-            return;
-        }
-        self.last_primary = Some(unsafe { set_as_primary_image(self.module_handle() as *mut c_void) });
+    fn set_self_as_primary_image(&mut self) {
+        self.last_primary =
+            Some(unsafe { set_as_primary_image(self.module_handle() as *mut c_void) });
     }
 }
 
@@ -718,8 +825,12 @@ impl<'a> Drop for PortableExecutable<'a> {
         if let Err(e) = self.disable_exceptions() {
             debug!("Failed to disable exceptions: {}", e.to_string())
         }
+        // remove ourselves from the index RB trees
+        if self.added_to_index {
+            self.remove_from_index();
+        }
         // remove ourselves from the hash table
-        if self.ldr_entry_init {
+        if self.added_to_hash_tbl {
             self.remove_from_hash_table();
         }
         // free TLS data
@@ -746,8 +857,9 @@ mod test {
         thread,
     };
     use tokio::runtime::Runtime;
-    use winapi::shared::winerror::{
-        ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND,
+    use winapi::{
+        shared::winerror::{ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND},
+        um::libloaderapi::GetModuleFileNameW,
     };
 
     static INIT: Once = Once::new();
@@ -859,13 +971,32 @@ mod test {
     #[serial]
     fn ldr_entry() {
         setup();
+        let mut file_name_buf = [0 as u16; 128];
+        let handle;
         {
             let _image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
-            let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
+            handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
             assert!(!handle.is_null());
+            let name_len = unsafe {
+                GetModuleFileNameW(
+                    handle,
+                    file_name_buf.as_mut_ptr(),
+                    file_name_buf.len() as u32,
+                )
+            };
+            assert_ne!(name_len, 0);
         }
-        let handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
-        assert!(handle.is_null());
+        assert!(unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) }.is_null());
+        assert_eq!(
+            unsafe {
+                GetModuleFileNameW(
+                    handle,
+                    file_name_buf.as_mut_ptr(),
+                    file_name_buf.len() as u32,
+                )
+            },
+            0
+        );
     }
 
     #[test]
@@ -882,7 +1013,7 @@ mod test {
     #[serial]
     fn primary_image() {
         setup();
-        let original_handle = unsafe{ GetModuleHandleW(null()) };
+        let original_handle = unsafe { GetModuleHandleW(null()) };
         {
             let mut image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
             assert_ne!(image.module_handle(), unsafe { GetModuleHandleW(null()) });

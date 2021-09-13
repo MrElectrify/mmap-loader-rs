@@ -11,7 +11,9 @@ pub struct Offsets {
     pub ldrp_hash_table: u32,
     pub ldrp_module_datatable_lock: u32,
     pub ldrp_handle_tls_data: u32,
-    pub ldrp_release_tls_entry: u32
+    pub ldrp_release_tls_entry: u32,
+    pub ldrp_mapping_info_index: u32,
+    pub ldrp_module_base_address_index: u32,
 }
 
 impl From<OffsetsResponse> for Offsets {
@@ -21,6 +23,8 @@ impl From<OffsetsResponse> for Offsets {
             ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
             ldrp_handle_tls_data: off.ldrp_handle_tls_data,
             ldrp_release_tls_entry: off.ldrp_release_tls_entry,
+            ldrp_mapping_info_index: off.ldrp_mapping_info_index,
+            ldrp_module_base_address_index: off.ldrp_module_base_address_index,
         }
     }
 }
@@ -32,6 +36,8 @@ impl From<&Offsets> for OffsetsResponse {
             ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
             ldrp_handle_tls_data: off.ldrp_handle_tls_data,
             ldrp_release_tls_entry: off.ldrp_release_tls_entry,
+            ldrp_mapping_info_index: off.ldrp_mapping_info_index,
+            ldrp_module_base_address_index: off.ldrp_module_base_address_index,
         }
     }
 }
@@ -43,6 +49,8 @@ impl From<Offsets> for OffsetsResponse {
             ldrp_module_datatable_lock: off.ldrp_module_datatable_lock,
             ldrp_handle_tls_data: off.ldrp_handle_tls_data,
             ldrp_release_tls_entry: off.ldrp_release_tls_entry,
+            ldrp_mapping_info_index: off.ldrp_mapping_info_index,
+            ldrp_module_base_address_index: off.ldrp_module_base_address_index,
         }
     }
 }
@@ -103,11 +111,15 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
     let ldrp_module_datatable_lock = *get_offset!(map, "LdrpModuleDatatableLock");
     let ldrp_handle_tls_data = *get_offset!(map, "LdrpHandleTlsData");
     let ldrp_release_tls_entry = *get_offset!(map, "LdrpReleaseTlsEntry");
+    let ldrp_mapping_info_index = *get_offset!(map, "LdrpMappingInfoIndex");
+    let ldrp_module_base_address_index = *get_offset!(map, "LdrpModuleBaseAddressIndex");
     Ok(Some(Offsets {
         ldrp_hash_table,
         ldrp_module_datatable_lock,
         ldrp_handle_tls_data,
         ldrp_release_tls_entry,
+        ldrp_mapping_info_index,
+        ldrp_module_base_address_index,
     }))
 }
 

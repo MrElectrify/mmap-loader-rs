@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     let host = args.get(3).map(String::as_str).unwrap_or("localhost");
     let port = args.get(4).map(String::as_str).unwrap_or("42220").parse()?;
     // fetch nt functions and constants
-    let nt_ctx = NtContext::resolve(host, port, None).await?;
+    let nt_ctx = NtContext::resolve(host, port).await?;
     // map the executable
     let executable = PortableExecutable::load(&args[1], &nt_ctx)?;
     // map the dll

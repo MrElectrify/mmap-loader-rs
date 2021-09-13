@@ -2,7 +2,9 @@ use crate::{
     db::OffsetHandler,
     error::{Err, Error},
     map::MappedFile,
-    offsets::{offset_client::OffsetClient, offset_server::Offset, OffsetsRequest},
+    offsets::{
+        offset_client::OffsetClient, offset_server::Offset, OffsetsRequest, OffsetsResponse,
+    },
     primitives::{protected_write, rtl_rb_tree_insert, ProtectionGuard, RtlMutex},
     util::to_wide,
 };
@@ -109,41 +111,14 @@ impl<'a> NtContext<'a> {
         }
     }
 
-    /// Resolves the context used by the mapper
+    /// Processes an offsets response
     ///
     /// # Arguments
     ///
-    /// `server_hostname`: The hostname of the endpoint of the PDB server
-    ///
-    /// `server_port`: The port of the endpoint of the PDB server
-    ///
-    /// `tls_info`: The certificate authority file, and optional expected domain
-    pub async fn resolve<S: AsRef<str>>(
-        server_hostname: S,
-        server_port: u16,
-        tls_info: Option<(Certificate, Option<S>)>,
-    ) -> anyhow::Result<NtContext<'a>> {
-        let mut channel = Channel::from_shared(format!(
-            "http://{}:{}",
-            server_hostname.as_ref(),
-            server_port
-        ))?;
-        // create the SSL context
-        if let Some((cert, domain)) = tls_info {
-            let mut tls = ClientTlsConfig::new().ca_certificate(cert);
-            if let Some(domain) = domain {
-                tls = tls.domain_name(domain.as_ref());
-            }
-            channel = channel.tls_config(tls)?;
-        }
-        let mut client = OffsetClient::new(channel.connect().await?);
-        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
-        let request = tonic::Request::new(OffsetsRequest {
-            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
-        });
-        let response = client.get_offsets(request).await?.into_inner();
+    /// `response`: The response to process
+    fn process_response(response: OffsetsResponse, ntdll: *const u8) -> NtContext<'a> {
         unsafe {
-            Ok(NtContext {
+            NtContext {
                 LdrpHashTable: RtlMutex::from_ref(
                     &mut *(ntdll.offset(response.ldrp_hash_table as isize)
                         as *mut [LIST_ENTRY; 32]),
@@ -168,8 +143,75 @@ impl<'a> NtContext<'a> {
                     &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
                         as *mut RTL_SRWLOCK),
                 ),
-            })
+            }
         }
+    }
+
+    /// Resolves the context used by the mapper
+    ///
+    /// # Arguments
+    ///
+    /// `server_hostname`: The hostname of the endpoint of the PDB server
+    ///
+    /// `server_port`: The port of the endpoint of the PDB server
+    pub async fn resolve<S: AsRef<str>>(
+        server_hostname: S,
+        server_port: u16,
+    ) -> anyhow::Result<NtContext<'a>> {
+        let channel = Channel::from_shared(format!(
+            "http://{}:{}",
+            server_hostname.as_ref(),
+            server_port
+        ))?;
+        let mut client = OffsetClient::new(channel.connect().await?);
+        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        let request = tonic::Request::new(OffsetsRequest {
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
+        });
+        let response = client.get_offsets(request).await?.into_inner();
+        Ok(NtContext::process_response(response, ntdll))
+    }
+
+    /// Resolves the context used by the mapper, over a secure TLS connection
+    ///
+    /// # Arguments
+    ///
+    /// `server_hostname`: The hostname of the endpoint of the PDB server
+    ///
+    /// `server_port`: The port of the endpoint of the PDB server
+    ///
+    /// `ca_cert`: A custom CA certificate. This is necessary if you have a
+    /// self-signed certificate on the other end. If not specified, webPKI
+    /// will use their store to verify the endpoint
+    ///
+    /// `domain`: The domain name to be verified
+    pub async fn resolve_tls<S: AsRef<str>>(
+        server_hostname: S,
+        server_port: u16,
+        ca_cert: Option<Certificate>,
+        domain: Option<S>,
+    ) -> anyhow::Result<NtContext<'a>> {
+        let mut tls_config = ClientTlsConfig::new();
+        // add a CA certificate in case a self-signed cert is used
+        if let Some(ca_cert) = ca_cert {
+            tls_config = tls_config.ca_certificate(ca_cert);
+        }
+        // add a pinned domain in case domain name verification is wanted
+        if let Some(domain) = domain {
+            tls_config = tls_config.domain_name(domain.as_ref());
+        }
+        let channel = Channel::from_shared(format!(
+            "http://{}:{}",
+            server_hostname.as_ref(),
+            server_port
+        ))?.tls_config(tls_config)?;
+        let mut client = OffsetClient::new(channel.connect().await?);
+        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        let request = tonic::Request::new(OffsetsRequest {
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
+        });
+        let response = client.get_offsets(request).await?.into_inner();
+        Ok(NtContext::process_response(response, ntdll))
     }
 
     /// Resolves the context used by the mapper
@@ -183,34 +225,7 @@ impl<'a> NtContext<'a> {
             ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
         });
         let response = handler.get_offsets(request).await?.into_inner();
-        unsafe {
-            Ok(NtContext {
-                LdrpHashTable: RtlMutex::from_ref(
-                    &mut *(ntdll.offset(response.ldrp_hash_table as isize)
-                        as *mut [LIST_ENTRY; 32]),
-                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
-                        as *mut RTL_SRWLOCK),
-                ),
-                LdrpHandleTlsData: std::mem::transmute(
-                    ntdll.offset(response.ldrp_handle_tls_data as isize),
-                ),
-                LdrpReleaseTlsEntry: std::mem::transmute(
-                    ntdll.offset(response.ldrp_release_tls_entry as isize),
-                ),
-                LdrpMappingInfoIndex: RtlMutex::from_ref(
-                    &mut *(ntdll.offset(response.ldrp_mapping_info_index as isize)
-                        as *mut RTL_RB_TREE),
-                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
-                        as *mut RTL_SRWLOCK),
-                ),
-                LdrpModuleBaseAddressIndex: RtlMutex::from_ref(
-                    &mut *(ntdll.offset(response.ldrp_module_base_address_index as isize)
-                        as *mut RTL_RB_TREE),
-                    &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
-                        as *mut RTL_SRWLOCK),
-                ),
-            })
-        }
+        Ok(NtContext::process_response(response, ntdll))
     }
 }
 
@@ -887,7 +902,7 @@ mod test {
     lazy_static! {
         static ref NT_CONTEXT: NtContext<'static> = Runtime::new()
             .unwrap()
-            .block_on(NtContext::resolve("localhost", 42221, None))
+            .block_on(NtContext::resolve("localhost", 42221))
             .unwrap();
     }
 

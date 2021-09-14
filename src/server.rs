@@ -1,23 +1,32 @@
 use crate::{
     db::{Offsets, OffsetsDatabase},
     offsets::{
-        offset_server::{Offset, OffsetServer},
+        offset_server::Offset,
         OffsetsRequest, OffsetsResponse,
     },
 };
+#[cfg(feature = "server")]
+use crate::offsets::offset_server::OffsetServer;
 use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
 use std::{
-    borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, net::SocketAddr,
+    borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor,
     path::PathBuf,
 };
+#[cfg(feature = "server")]
+use std::net::SocketAddr;
 use tokio::fs::write;
 use tokio::sync::Mutex;
 use tonic::{
-    transport,
-    transport::{Identity, ServerTlsConfig},
     Request, Response, Status,
 };
+#[cfg(feature = "server")]
+use tonic::{
+    transport,
+    transport::Identity,
+};
+#[cfg(all(feature = "server", feature = "tls"))]
+use tonic::transport::ServerTlsConfig;
 
 /// The actual handler for Offset requests. Owns an internal database
 pub struct OffsetHandler {
@@ -26,12 +35,15 @@ pub struct OffsetHandler {
 }
 
 /// An offset server that parses PDBs and sends the parsed addresses to the client
+#[cfg(feature = "server")]
 pub struct Server {
     handler: OffsetHandler,
     endpoint: SocketAddr,
+    #[allow(dead_code)]
     tls_identity: Option<Identity>,
 }
 
+#[cfg(feature = "server")]
 impl Server {
     /// Creates a new server on an endpoint, with a JSON cache
     /// stored at the `cache_path`
@@ -50,7 +62,7 @@ impl Server {
         tls_identity: Option<Identity>,
     ) -> Result<Server, anyhow::Error> {
         Ok(Server {
-            handler: OffsetHandler::new(cache_path.as_ref().into())?,
+            handler: OffsetHandler::new(cache_path.as_ref())?,
             endpoint,
             tls_identity,
         })
@@ -60,6 +72,7 @@ impl Server {
     pub async fn run(self) -> Result<(), anyhow::Error> {
         let endpoint = self.endpoint;
         let mut server = transport::Server::builder();
+        #[cfg(feature = "tls")]
         if let Some(tls_identity) = self.tls_identity {
             server = server.tls_config(ServerTlsConfig::new().identity(tls_identity))?;
         }
@@ -72,14 +85,14 @@ impl Server {
 }
 
 impl OffsetHandler {
-    pub fn new(cache_path: PathBuf) -> anyhow::Result<OffsetHandler> {
-        let database = Mutex::new(match read_to_string(&cache_path) {
+    pub fn new<S: AsRef<str>>(cache_path: S) -> anyhow::Result<OffsetHandler> {
+        let database = Mutex::new(match read_to_string(cache_path.as_ref()) {
             Ok(s) => serde_json::from_str(&s)?,
             _ => OffsetsDatabase::default(),
         });
         Ok(OffsetHandler {
             database,
-            cache_path,
+            cache_path: cache_path.as_ref().into(),
         })
     }
 }
@@ -243,59 +256,49 @@ mod test {
 
     #[tokio::test]
     async fn hash_length() {
-        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json";
-        let server = Server::new(endpoint, cache_path, None).unwrap();
+        let handler = OffsetHandler::new("test/cache.json").unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "123".into(),
         });
-        let err = server.handler.get_offsets(request).await.unwrap_err();
+        let err = handler.get_offsets(request).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "Bad hash length");
     }
 
     #[tokio::test]
     async fn hash_digits() {
-        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json";
-        let server = Server::new(endpoint, cache_path, None).unwrap();
+        let handler = OffsetHandler::new("test/cache.json").unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201AG".into(),
         });
-        let err = server.handler.get_offsets(request).await.unwrap_err();
+        let err = handler.get_offsets(request).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "Bad hex digit");
     }
 
     #[tokio::test]
     async fn not_found() {
-        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json";
-        let server = Server::new(endpoint, cache_path, None).unwrap();
+        let handler = OffsetHandler::new("test/cache.json").unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A2".into(),
         });
-        let err = server.handler.get_offsets(request).await.unwrap_err();
+        let err = handler.get_offsets(request).await.unwrap_err();
         assert_eq!(err.message(), "PDB hash not found");
     }
 
     #[tokio::test]
     async fn good_fetch() {
-        let endpoint = SocketAddr::new("127.0.0.1".parse().unwrap(), 42220);
-        let cache_path = "test/cache.json";
-        let server = Server::new(endpoint, cache_path, None).unwrap();
+        let handler = OffsetHandler::new("test/cache.json").unwrap();
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A1".into(),
         });
-        let response = server
-            .handler
+        let response = handler
             .get_offsets(request)
             .await
             .unwrap()
             .into_inner();
         // ensure it was cached
-        assert!(server
-            .handler
+        assert!(handler
             .database
             .lock()
             .await

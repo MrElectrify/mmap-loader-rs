@@ -27,7 +27,11 @@ use std::{
     ptr,
     ptr::null_mut,
 };
-use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+use tonic::transport::Channel;
+#[cfg(feature = "tls")]
+use tonic::transport::Certificate;
+#[cfg(feature = "tls")]
+use tonic::transport::ClientTlsConfig;
 use winapi::{
     shared::{
         guiddef::GUID,
@@ -187,6 +191,7 @@ impl<'a> NtContext<'a> {
     /// will use their store to verify the endpoint
     ///
     /// `domain`: The domain name to be verified
+    #[cfg(feature = "tls")]
     pub async fn resolve_tls<S: AsRef<str>>(
         server_hostname: S,
         server_port: u16,
@@ -888,49 +893,25 @@ impl<'a> Drop for PortableExecutable<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::server::Server;
     use lazy_static::lazy_static;
     use serial_test::serial;
-    use std::{
-        net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-        ptr::null,
-        sync::Once,
-        thread,
-    };
+    use std::ptr::null;
     use tokio::runtime::Runtime;
-    use tonic::transport::Identity;
     use winapi::{
         shared::winerror::{ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND},
         um::libloaderapi::GetModuleFileNameW,
     };
 
-    static INIT: Once = Once::new();
-
     lazy_static! {
         static ref NT_CONTEXT: NtContext<'static> = Runtime::new()
             .unwrap()
-            .block_on(NtContext::resolve("localhost", 42221))
+            .block_on(NtContext::resolve_local(&OffsetHandler::new("test/cache.json").unwrap()))
             .unwrap();
-    }
-
-    fn setup() {
-        INIT.call_once(|| {
-            let server = Server::new(
-                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 42221),
-                "test/cache.json",
-                None,
-            )
-            .unwrap();
-            thread::spawn(move || {
-                Runtime::new().unwrap().block_on(server.run()).unwrap();
-            });
-        });
     }
 
     #[test]
     #[serial]
     fn bad_dos() {
-        setup();
         let err: std::io::Error = PortableExecutable::load("test/baddos.exe", &NT_CONTEXT)
             .err()
             .unwrap()
@@ -942,7 +923,6 @@ mod test {
     #[test]
     #[serial]
     fn bad_section() {
-        setup();
         let err: std::io::Error = PortableExecutable::load("test/badsection.exe", &NT_CONTEXT)
             .err()
             .unwrap()
@@ -954,7 +934,6 @@ mod test {
     #[test]
     #[serial]
     fn bad_entry() {
-        setup();
         let err: Error = PortableExecutable::load("test/badentry.exe", &NT_CONTEXT)
             .err()
             .unwrap()
@@ -966,7 +945,6 @@ mod test {
     #[test]
     #[serial]
     fn bad_mod() {
-        setup();
         let err: std::io::Error = PortableExecutable::load("test/badmod.exe", &NT_CONTEXT)
             .err()
             .unwrap()
@@ -978,7 +956,6 @@ mod test {
     #[test]
     #[serial]
     fn bad_proc() {
-        setup();
         let err: std::io::Error = PortableExecutable::load("test/badproc.exe", &NT_CONTEXT)
             .err()
             .unwrap()
@@ -991,7 +968,6 @@ mod test {
     #[test]
     #[serial]
     fn bad_arch() {
-        setup();
         let err: Error = PortableExecutable::load("test/x86.exe", &NT_CONTEXT)
             .err()
             .unwrap()
@@ -1003,7 +979,6 @@ mod test {
     #[test]
     #[serial]
     fn basic_image() {
-        setup();
         let image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
         unsafe {
             assert_eq!(image.run(), 23);
@@ -1013,7 +988,6 @@ mod test {
     #[test]
     #[serial]
     fn ldr_entry() {
-        setup();
         let mut file_name_buf = [0 as u16; 128];
         let handle;
         {
@@ -1045,7 +1019,6 @@ mod test {
     #[test]
     #[serial]
     fn tls() {
-        setup();
         let image = PortableExecutable::load("test/tls.exe", &NT_CONTEXT).unwrap();
         unsafe {
             assert_eq!(image.run(), 7);
@@ -1055,7 +1028,6 @@ mod test {
     #[test]
     #[serial]
     fn primary_image() {
-        setup();
         let original_handle = unsafe { GetModuleHandleW(null()) };
         {
             let mut image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
@@ -1068,7 +1040,10 @@ mod test {
 
     #[tokio::test]
     #[serial]
+    #[cfg(target = "tls")]
     async fn tls_server() {
+        use std::net::SocketAddrV4;
+        use tonic::transport::Identity;
         // start the server
         let endpoint = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 44443));
         // we stole these certificates from the tonic test suite

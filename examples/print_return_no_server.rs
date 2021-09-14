@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     // create the local handler
-    let handler = OffsetHandler::new("test/cache.json".into())?;
+    let handler = OffsetHandler::new("test/cache.json")?;
     // fetch nt functions and constants
     let nt_ctx = NtContext::resolve_local(&handler).await?;
     // map the executable

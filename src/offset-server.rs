@@ -10,15 +10,25 @@
 use std::{env, net::SocketAddr};
 
 use mmap_loader::server::Server;
+#[cfg(feature = "tls")]
 use tonic::transport::Identity;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     // they must specify both cert and key if they want TLS
+    #[cfg(feature = "tls")]
     if args.len() > 6 || args.len() == 5 || args.get(1).contains(&"-help") {
         eprintln!(
             "Usage: {} <address:ip:0.0.0.0> <port:u16:42220> <cache_path:path:cache.json> <cert_path:opt<path>> <key_path:opt<path>>",
+            args[0]
+        );
+        return Ok(());
+    }
+    #[cfg(not(feature = "tls"))]
+    if args.len() > 4 || args.get(1).contains(&"-help") {
+        eprintln!(
+            "Usage: {} <address:ip:0.0.0.0> <port:u16:42220> <cache_path:path:cache.json>",
             args[0]
         );
         return Ok(());
@@ -35,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()?;
     let cache_path = args.get(3).map(|str| str.as_str()).unwrap_or("cache.json");
     let tls_identity = match args.len() {
+        #[cfg(feature = "tls")]
         6 => {
             let cert = tokio::fs::read(&args[4]).await?;
             let key = tokio::fs::read(&args[5]).await?;

@@ -12,6 +12,12 @@ A Windows Portable Executable Manual Map Loader that supports both executable an
 - Supports lazy execution, where multiple PE files can be loaded before any are executed
 - Returns control flow to the calling function after execution is complete
 
+## Feature Flags
+- server
+    - enables a separate server component
+- tls
+    - enables tls support for the client and server
+
 ## Support
 Let me know if something doesn't work by opening an issue. It has only been tested on Windows 10 20H2, and likely won't work on Windows 7 and prior. To see if it works on your system, run `cargo test`
 

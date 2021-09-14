@@ -14,5 +14,6 @@ pub mod server;
 #[cfg(target_os = "windows")]
 mod util;
 
+#[cfg(target_os = "windows")]
 /// Exported for simple uses
 pub use pe::{NtContext, PortableExecutable};

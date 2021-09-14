@@ -60,4 +60,4 @@ winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "h
 serial_test = "0.5"
 
 [package.metadata.docs.rs]
-targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+targets = ["x86_64-pc-windows-gnu", "x86_64-unknown-linux-gnu"]

@@ -1,12 +1,12 @@
+use ntapi::ntrtl::{
+    RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
+};
 use std::{
     cell::UnsafeCell,
     ffi::c_void,
     io::Result,
     ops::{Deref, DerefMut},
     ptr::null_mut,
-};
-use ntapi::ntrtl::{
-    RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
 };
 use winapi::{
     shared::{minwindef::DWORD, ntdef::PRTL_BALANCED_NODE},

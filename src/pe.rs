@@ -1,5 +1,5 @@
 use crate::{
-    error::{Err, Error},
+    error::Error,
     map::MappedFile,
     offsets::{
         offset_client::OffsetClient, offset_server::Offset, OffsetsRequest, OffsetsResponse,
@@ -37,6 +37,7 @@ use winapi::{
             UNICODE_STRING,
         },
         ntstatus::STATUS_SUCCESS,
+        winerror::ERROR_FILE_NOT_FOUND,
     },
     um::{
         libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
@@ -75,7 +76,7 @@ impl<'a> NtContext<'a> {
         unsafe {
             let dos_header = ntdll as *const IMAGE_DOS_HEADER;
             if dos_header.is_null() {
-                return Err(Error(Err::FileNotFound));
+                return Err(Error::NtDllNotLoaded);
             }
             let nt_headers = &*((dos_header as *const u8).offset((*dos_header).e_lfanew as isize)
                 as *const IMAGE_NT_HEADERS64);
@@ -84,7 +85,7 @@ impl<'a> NtContext<'a> {
                     .VirtualAddress as isize,
             ) as *const IMAGE_DEBUG_DIRECTORY);
             if debug_entry.Type != IMAGE_DEBUG_TYPE_CODEVIEW {
-                return Err(Error(Err::NtDllDebugType));
+                return Err(Error::NtDllDebugType);
             }
             let codeview_entry = &*((dos_header as *const u8)
                 .offset((*debug_entry).AddressOfRawData as isize)
@@ -93,7 +94,7 @@ impl<'a> NtContext<'a> {
                 .rsds_signature
                 .eq_ignore_ascii_case("RSDS".as_bytes())
             {
-                return Err(Error(Err::NtDllRsdsSig));
+                return Err(Error::NtDllRsdsSig);
             }
             Ok(format!(
                 "{:08X}{:04X}{:04X}{}{:X}",
@@ -387,7 +388,7 @@ impl<'a> PortableExecutable<'a> {
                 self.file.contents() as u64,
             ) == false as u8
         } {
-            return Err(Error(Err::ExceptionTableEntry));
+            return Err(Error::ExceptionTableEntry);
         }
         Ok(())
     }
@@ -401,7 +402,7 @@ impl<'a> PortableExecutable<'a> {
         }
         // remove the table from the process
         if unsafe { RtlDeleteFunctionTable(exception_table.as_mut_ptr()) == false as u8 } {
-            return Err(Error(Err::ExceptionTableEntry));
+            return Err(Error::ExceptionTableEntry);
         }
         Ok(())
     }
@@ -421,13 +422,13 @@ impl<'a> PortableExecutable<'a> {
         let tls_directory = self
             .file
             .get_rva::<IMAGE_TLS_DIRECTORY>(tls_directory.VirtualAddress as isize)
-            .ok_or(Error(Err::TLSOutOfBounds))?;
+            .ok_or(Error::TLSOutOfBounds)?;
         let mut tls_callback = unsafe {
             self.file
                 .get_rva::<Option<unsafe extern "stdcall" fn(PVOID, u32, PVOID)>>(
                     ((*tls_directory).AddressOfCallBacks - self.file.contents() as u64) as isize,
                 )
-                .ok_or(Error(Err::CallbackOutOfBounds))?
+                .ok_or(Error::CallbackOutOfBounds)?
         };
         // execute all of the TLS callbacks
         unsafe {
@@ -446,7 +447,7 @@ impl<'a> PortableExecutable<'a> {
         if unsafe { (self.context.LdrpReleaseTlsEntry)(self.loader_entry.as_mut().get_mut(), 0) }
             != STATUS_SUCCESS
         {
-            Err(Error(Err::TLSData))
+            Err(Error::TLSData)
         } else {
             Ok(())
         }
@@ -457,7 +458,7 @@ impl<'a> PortableExecutable<'a> {
         if unsafe { (self.context.LdrpHandleTlsData)(self.loader_entry.as_mut().get_mut()) }
             != STATUS_SUCCESS
         {
-            Err(Error(Err::TLSData))
+            Err(Error::TLSData)
         } else {
             Ok(())
         }
@@ -474,7 +475,7 @@ impl<'a> PortableExecutable<'a> {
         let exception_table = self
             .file
             .get_rva_mut::<IMAGE_RUNTIME_FUNCTION_ENTRY>(exception_dir.VirtualAddress as isize)
-            .ok_or(Error(Err::ExceptionTableOutOfBounds))?;
+            .ok_or(Error::ExceptionTableOutOfBounds)?;
         return Ok(unsafe {
             std::slice::from_raw_parts_mut(
                 exception_table,
@@ -501,7 +502,7 @@ impl<'a> PortableExecutable<'a> {
                 &mut hash,
             ) != STATUS_SUCCESS
             {
-                return Err(Error(Err::LdrEntry));
+                return Err(Error::LdrEntry);
             }
         }
         self.loader_entry.BaseNameHashValue = hash;
@@ -553,7 +554,9 @@ impl<'a> PortableExecutable<'a> {
         // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
-        let file_name = path.file_name().ok_or(Error(Err::FileNotFound))?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| std::io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND as i32))?;
         let file_path = path.canonicalize()?;
         debug!(
             "Loading {} at path {}",
@@ -653,7 +656,7 @@ impl<'a> PortableExecutable<'a> {
             // we transmute here because I have no earthly idea how to return a generic function
             let entry_point: PLDR_INIT_ROUTINE = std::mem::transmute(
                 file.get_rva::<u8>(address_of_ep as isize)
-                    .ok_or(Error(Err::EPOutOfBounds))?,
+                    .ok_or(Error::EPOutOfBounds)?,
             );
             Ok(entry_point)
         }
@@ -670,15 +673,15 @@ impl<'a> PortableExecutable<'a> {
         unsafe {
             let dos_header = &*file
                 .get_rva::<IMAGE_DOS_HEADER>(0)
-                .ok_or(Error(Err::DOSOutOfBounds))?;
+                .ok_or(Error::DOSOutOfBounds)?;
             let nt_headers = &*file
                 .get_rva::<IMAGE_NT_HEADERS64>(dos_header.e_lfanew as isize)
-                .ok_or(Error(Err::NTOutOfBounds))?;
+                .ok_or(Error::NTOutOfBounds)?;
             // ensure supported architecture
             if nt_headers.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64
                 || nt_headers.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC
             {
-                return Err(Error(Err::UnsupportedArch));
+                return Err(Error::UnsupportedArch);
             }
             // load section headers
             let section_headers = std::slice::from_raw_parts(
@@ -688,7 +691,7 @@ impl<'a> PortableExecutable<'a> {
                     nt_headers.FileHeader.NumberOfSections as usize
                         * std::mem::size_of::<IMAGE_SECTION_HEADER>(),
                 )
-                .ok_or(Error(Err::SectOutOfBounds))?,
+                .ok_or(Error::SectOutOfBounds)?,
                 nt_headers.FileHeader.NumberOfSections as usize,
             );
             Ok((nt_headers, section_headers))
@@ -707,7 +710,7 @@ impl<'a> PortableExecutable<'a> {
                 self.section_protections.push(ProtectionGuard::new(
                     self.file
                         .get_rva_mut::<c_void>(section.VirtualAddress as isize)
-                        .ok_or(Error(Err::SectOutOfBounds))?,
+                        .ok_or(Error::SectOutOfBounds)?,
                     *section.Misc.VirtualSize() as usize,
                     PortableExecutable::section_flags_to_prot(section.Characteristics),
                 )?)
@@ -732,7 +735,7 @@ impl<'a> PortableExecutable<'a> {
                     iat_directory.VirtualAddress as isize,
                     iat_directory.Size as usize,
                 )
-                .ok_or(Error(Err::IDOutOfBounds))?;
+                .ok_or(Error::IDOutOfBounds)?;
             self.resolve_import_descriptors(std::slice::from_raw_parts(
                 iat_entry,
                 (iat_directory.Size as usize) / std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>(),
@@ -762,7 +765,7 @@ impl<'a> PortableExecutable<'a> {
             let name = self
                 .file
                 .get_rva::<i8>(entry.Name as isize)
-                .ok_or(Error(Err::LibNameOutOfBounds))?;
+                .ok_or(Error::LibNameOutOfBounds)?;
             unsafe {
                 debug!("Loading library {:?}", CStr::from_ptr(name));
                 let library = LoadLibraryA(name);
@@ -776,7 +779,7 @@ impl<'a> PortableExecutable<'a> {
                 let mut thunk = self
                     .file
                     .get_rva_mut::<IMAGE_THUNK_DATA>(entry.FirstThunk as isize)
-                    .ok_or(Error(Err::IATOutOfBounds))?;
+                    .ok_or(Error::IATOutOfBounds)?;
                 while (*thunk).u1.AddressOfData() != &0 {
                     let proc_name = if ((*thunk).u1.Ordinal() & IMAGE_ORDINAL_FLAG) != 0 {
                         (*(*thunk).u1.Ordinal() & !IMAGE_ORDINAL_FLAG) as *const i8
@@ -784,7 +787,7 @@ impl<'a> PortableExecutable<'a> {
                         &(*self
                             .file
                             .get_rva::<IMAGE_IMPORT_BY_NAME>(*(*thunk).u1.AddressOfData() as isize)
-                            .ok_or(Error(Err::ProcNameOutOfBounds))?)
+                            .ok_or(Error::ProcNameOutOfBounds)?)
                         .Name as *const i8
                     };
                     if ((*thunk).u1.Ordinal() & IMAGE_ORDINAL_FLAG) != 0 {
@@ -795,7 +798,7 @@ impl<'a> PortableExecutable<'a> {
                     } else {
                         // if it is a pointer, make sure it is not null
                         if proc_name.is_null() {
-                            return Err(Error(Err::NullProcName).into());
+                            return Err(Error::NullProcName.into());
                         }
                         debug!(
                             "Loading procedure with name {:?}",
@@ -957,7 +960,7 @@ mod test {
             .unwrap()
             .downcast()
             .unwrap();
-        assert_eq!(err.0, Err::EPOutOfBounds);
+        assert_eq!(err, Error::EPOutOfBounds);
     }
 
     #[test]
@@ -994,7 +997,7 @@ mod test {
             .unwrap()
             .downcast()
             .unwrap();
-        assert_eq!(err.0, Err::UnsupportedArch);
+        assert_eq!(err, Error::UnsupportedArch);
     }
 
     #[test]

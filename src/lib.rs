@@ -15,4 +15,4 @@ pub mod server;
 mod util;
 
 /// Exported for simple uses
-pub use pe::{ NtContext, PortableExecutable };
+pub use pe::{NtContext, PortableExecutable};

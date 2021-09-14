@@ -16,7 +16,6 @@ path = "src/offset-server.rs"
 
 [profile.release]
 codegen-units = 1
-debug = true
 panic = "abort"
 lto = true
 
@@ -52,6 +51,7 @@ serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
 simple_logger = { version = "1.1" }
+thiserror = "1.0"
 tokio = { version = "1.0", features = ["fs", "macros", "rt-multi-thread"] }
 tonic = {version = "0.5", features = ["tls", "tls-roots"] }
 winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "handleapi", "memoryapi", "std", "winbase"] }

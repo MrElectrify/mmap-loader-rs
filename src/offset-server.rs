@@ -7,7 +7,6 @@
 /// Of course TLS is not really necessary at all here, because nothing particularly
 /// private is sent over gRPC. I added it for cloudflare gRPC support, which pretty much
 /// wants you to use TLS.
-
 use std::{env, net::SocketAddr};
 
 use mmap_loader::server::Server;

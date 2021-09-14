@@ -1,25 +1,22 @@
 use crate::{
-    db::{
-        Offsets, OffsetsDatabase
-    }, 
+    db::{Offsets, OffsetsDatabase},
     offsets::{
-        OffsetsRequest, OffsetsResponse, 
-        offset_server::{
-            Offset, OffsetServer
-        }
-    }
+        offset_server::{Offset, OffsetServer},
+        OffsetsRequest, OffsetsResponse,
+    },
 };
 use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
-use tokio::sync::Mutex;
-use std::{borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, net::SocketAddr, path::PathBuf};
+use std::{
+    borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, net::SocketAddr,
+    path::PathBuf,
+};
 use tokio::fs::write;
+use tokio::sync::Mutex;
 use tonic::{
     transport,
     transport::{Identity, ServerTlsConfig},
-    Request,
-    Response,
-    Status
+    Request, Response, Status,
 };
 
 /// The actual handler for Offset requests. Owns an internal database

@@ -2,7 +2,7 @@
 /// Description: Prints the executable return value.
 /// Includes the handler
 use mmap_loader::{
-    db::OffsetHandler,
+    server::OffsetHandler,
     pe::{NtContext, PortableExecutable},
 };
 use std::env;

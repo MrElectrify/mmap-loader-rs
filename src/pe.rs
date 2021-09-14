@@ -1,11 +1,11 @@
 use crate::{
-    db::OffsetHandler,
     error::{Err, Error},
     map::MappedFile,
     offsets::{
         offset_client::OffsetClient, offset_server::Offset, OffsetsRequest, OffsetsResponse,
     },
     primitives::{protected_write, rtl_rb_tree_insert, ProtectionGuard, RtlMutex},
+    server::OffsetHandler,
     util::to_wide,
 };
 use log::debug;
@@ -54,7 +54,8 @@ use winapi::{
     },
 };
 
-/// The context of Nt functions and statics
+/// The context of internal Nt functions and statics that are
+/// required for the mapper to work
 #[allow(non_snake_case)]
 pub struct NtContext<'a> {
     LdrpHashTable: RtlMutex<'a, [LIST_ENTRY; 32]>,
@@ -204,7 +205,8 @@ impl<'a> NtContext<'a> {
             "http://{}:{}",
             server_hostname.as_ref(),
             server_port
-        ))?.tls_config(tls_config)?;
+        ))?
+        .tls_config(tls_config)?;
         let mut client = OffsetClient::new(channel.connect().await?);
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
         let request = tonic::Request::new(OffsetsRequest {
@@ -255,6 +257,7 @@ unsafe fn set_as_primary_image(image_base: PVOID) -> PVOID {
     old_base
 }
 
+/// A portable executable that is all nicely wrapped up in a class
 pub struct PortableExecutable<'a> {
     file: MappedFile,
     file_name: Vec<u16>,
@@ -885,9 +888,14 @@ mod test {
     use crate::server::Server;
     use lazy_static::lazy_static;
     use serial_test::serial;
-    use tonic::transport::Identity;
-    use std::{net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4}, ptr::null, sync::Once, thread};
+    use std::{
+        net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+        ptr::null,
+        sync::Once,
+        thread,
+    };
     use tokio::runtime::Runtime;
+    use tonic::transport::Identity;
     use winapi::{
         shared::winerror::{ERROR_BAD_EXE_FORMAT, ERROR_MOD_NOT_FOUND, ERROR_PROC_NOT_FOUND},
         um::libloaderapi::GetModuleFileNameW,
@@ -1060,6 +1068,7 @@ mod test {
     async fn tls_server() {
         // start the server
         let endpoint = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 44443));
+        // we stole these certificates from the tonic test suite
         let cert = tokio::fs::read("test/server.pem").await.unwrap();
         let key = tokio::fs::read("test/server.key").await.unwrap();
         let identity = Identity::from_pem(cert, key);
@@ -1067,9 +1076,9 @@ mod test {
         // resolve
         let ca_cert = tokio::fs::read("test/ca.pem").await.unwrap();
         let ca_cert = Certificate::from_pem(ca_cert);
-        tokio::select!{
+        tokio::select! {
             _ = server.run() => {},
-            _ = NtContext::resolve_tls("localhost", 44443, Some(ca_cert), None) => {}
+            res = NtContext::resolve_tls("localhost", 44443, Some(ca_cert), None) => { res.unwrap(); }
         };
     }
 }

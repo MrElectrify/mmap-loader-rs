@@ -5,7 +5,6 @@ use std::{
     ops::{Deref, DerefMut},
     ptr::null_mut,
 };
-
 use ntapi::ntrtl::{
     RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
 };
@@ -23,7 +22,9 @@ use winapi::{
 /// # Arguments
 ///
 /// `tree`: The tree that is being operated on
+///
 /// `node`: The node to insert
+///
 /// `compare`: The function that returns true if the first node is *less* than the second node
 pub unsafe fn rtl_rb_tree_insert<F: Fn(PRTL_BALANCED_NODE, PRTL_BALANCED_NODE) -> bool>(
     tree: &mut RTL_RB_TREE,
@@ -40,6 +41,7 @@ pub unsafe fn rtl_rb_tree_insert<F: Fn(PRTL_BALANCED_NODE, PRTL_BALANCED_NODE) -
 /// # Arguments
 ///
 /// `tree`: The tree that the node is part of
+///
 /// `node`: The node that is attempting to be accessed.
 /// The pointer to pointer must not be null
 unsafe fn rtl_rb_tree_access_node(
@@ -57,6 +59,15 @@ unsafe fn rtl_rb_tree_access_node(
     }
 }
 
+/// Finds the proper insert location for an RTL red-black tree
+///
+/// # Arguments
+///
+/// `tree`: The tree
+///
+/// `node`: The node to insert
+///
+/// `compare`: The function that returns true if the first node is *less* than the second node
 unsafe fn rtl_rb_tree_find_insert_location<
     F: Fn(PRTL_BALANCED_NODE, PRTL_BALANCED_NODE) -> bool,
 >(
@@ -164,7 +175,9 @@ impl ProtectionGuard {
     /// # Arguments
     ///
     /// `addr`: The base address to protect
+    ///
     /// `size`: The number of bytes to protect
+    ///
     /// `prot`: The protection to protect with
     pub fn new(addr: *mut c_void, size: usize, prot: DWORD) -> Result<Self> {
         let mut old_prot = 0;

@@ -1040,9 +1040,10 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    #[cfg(target = "tls")]
+    #[cfg(all(feature = "tls", feature = "server"))]
     async fn tls_server() {
-        use std::net::SocketAddrV4;
+        use crate::server::Server;
+        use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
         use tonic::transport::Identity;
         // start the server
         let endpoint = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 44443));

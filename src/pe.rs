@@ -20,13 +20,7 @@ use ntapi::{
         RtlRbRemoveNode, HASH_STRING_ALGORITHM_DEFAULT, RTL_RB_TREE,
     },
 };
-use std::{
-    ffi::{c_void, CStr},
-    path::Path,
-    pin::Pin,
-    ptr,
-    ptr::null_mut,
-};
+use std::{ffi::{CStr, OsString, c_void}, os::windows::prelude::OsStrExt, path::Path, pin::Pin, ptr, ptr::null_mut, os::windows::prelude::*};
 use tonic::transport::Channel;
 #[cfg(feature = "tls")]
 use tonic::transport::Certificate;
@@ -559,21 +553,24 @@ impl<'a> PortableExecutable<'a> {
         // first make sure we got all of the required functions
         let mut file = MappedFile::load(path)?;
         let path = Path::new(path);
-        let file_name = path
+        let file_name: Vec<u16> = path
             .file_name()
-            .ok_or_else(|| std::io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND as i32))?;
-        let file_path = path.canonicalize()?;
+            .ok_or_else(|| std::io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND as i32))?
+            .encode_wide()
+            .collect();
+        // remove the "extended length path syntax"
+        let file_path: Vec<u16> = path.canonicalize()?.as_os_str().encode_wide().skip(4).collect();
         debug!(
             "Loading {} at path {}",
-            file_name.to_string_lossy(),
-            file_path.to_string_lossy()
+            OsString::from_wide(&file_name[..]).as_os_str().to_string_lossy(),
+            OsString::from_wide(&file_path[..]).as_os_str().to_string_lossy()
         );
         let (nt_headers, section_headers) = PortableExecutable::load_headers(&mut file)?;
         let entry_point = PortableExecutable::load_entry_point(&mut file, nt_headers)?;
         let mut pe = PortableExecutable {
             file,
-            file_name: to_wide(&file_name.to_string_lossy()),
-            file_path: to_wide(&file_path.to_string_lossy()),
+            file_name,
+            file_path,
             nt_headers,
             section_headers,
             entry_point,

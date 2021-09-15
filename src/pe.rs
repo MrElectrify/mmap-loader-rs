@@ -644,7 +644,7 @@ impl<'a> PortableExecutable<'a> {
                 CondenseLink: SINGLE_LIST_ENTRY::default(),
                 PreorderNumber: 0,
             }),
-            context: context,
+            context,
             added_to_hash_tbl: false,
             added_to_index: false,
             called_entry_point: false,

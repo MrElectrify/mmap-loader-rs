@@ -1,6 +1,8 @@
 # mmap-loader-rs
 A Windows Portable Executable Manual Map Loader that supports both executable and DLL types. Written in Rust
 
+[Crate](https://crates.io/crates/mmap-loader) | [Documentation (excl TLS)](https://docs.rs/mmap-loader/0.3.3/mmap_loader/)
+
 ## Features
 - Supports both DLL and EXE types
 - Remote or local PDB server for parsing out internal Windows functions
@@ -13,15 +15,16 @@ A Windows Portable Executable Manual Map Loader that supports both executable an
 - Returns control flow to the calling function after execution is complete
 
 ## Feature Flags
-- server
+- `server`
     - enables a separate server component
-- tls
+- `tls`
     - enables tls support for the client and server
 
 ## Support
 Let me know if something doesn't work by opening an issue. It has only been tested on Windows 10 20H2, and likely won't work on Windows 7 and prior. To see if it works on your system, run `cargo test`
 
 ## Known Limitations
+- Docs.rs building with TLS support is broken due to [this issue](https://github.com/briansmith/ring/issues/1379). Build docs locally with a compliant C compiler using `cargo doc` to view full documentation
 - 32-bit is not supported
 - `GetModuleInformation` and related functions will not find the loaded module. This is because the linked lists that are used to find the module for these functions are sanity checked and protected by the kernel, and the first access after modifying these structures would result in a fatal OS exception. A suggested alternative is to use `VirtualQuery` to get the size of allocation
 

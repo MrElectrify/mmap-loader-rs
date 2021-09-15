@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     // fetch nt functions and constants
     let nt_ctx = NtContext::resolve_local(&handler).await?;
     // map the executable
-    let executable = PortableExecutable::load(&args[1], &nt_ctx)?;
+    let mut executable = PortableExecutable::load(&args[1], nt_ctx)?;
     println!("Result: {}", unsafe { executable.run() });
     Ok(())
 }

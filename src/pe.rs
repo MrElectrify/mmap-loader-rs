@@ -64,15 +64,16 @@ use winapi::{
 /// The context of internal Nt functions and statics that are
 /// required for the mapper to work
 #[allow(non_snake_case)]
-pub struct NtContext<'a> {
-    LdrpHashTable: RtlMutex<'a, [LIST_ENTRY; 32]>,
+#[derive(Clone)]
+pub struct NtContext {
+    LdrpHashTable: RtlMutex<[LIST_ENTRY; 32]>,
     LdrpHandleTlsData: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY) -> i32,
     LdrpReleaseTlsEntry: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY, null: usize) -> i32,
-    LdrpMappingInfoIndex: RtlMutex<'a, RTL_RB_TREE>,
-    LdrpModuleBaseAddressIndex: RtlMutex<'a, RTL_RB_TREE>,
+    LdrpMappingInfoIndex: RtlMutex<RTL_RB_TREE>,
+    LdrpModuleBaseAddressIndex: RtlMutex<RTL_RB_TREE>,
 }
 
-impl<'a> NtContext<'a> {
+impl NtContext {
     /// Gets the loaded NTDLL hash
     ///
     /// # Arguments
@@ -124,7 +125,7 @@ impl<'a> NtContext<'a> {
     /// # Arguments
     ///
     /// `response`: The response to process
-    fn process_response(response: OffsetsResponse, ntdll: *const u8) -> NtContext<'a> {
+    fn process_response(response: OffsetsResponse, ntdll: *const u8) -> NtContext {
         unsafe {
             NtContext {
                 LdrpHashTable: RtlMutex::from_ref(
@@ -165,7 +166,7 @@ impl<'a> NtContext<'a> {
     pub async fn resolve<S: AsRef<str>>(
         server_hostname: S,
         server_port: u16,
-    ) -> anyhow::Result<NtContext<'a>> {
+    ) -> anyhow::Result<NtContext> {
         let channel = Channel::from_shared(format!(
             "http://{}:{}",
             server_hostname.as_ref(),
@@ -199,7 +200,7 @@ impl<'a> NtContext<'a> {
         server_port: u16,
         ca_cert: Option<Certificate>,
         domain: Option<S>,
-    ) -> anyhow::Result<NtContext<'a>> {
+    ) -> anyhow::Result<NtContext> {
         let mut tls_config = ClientTlsConfig::new();
         // add a CA certificate in case a self-signed cert is used
         if let Some(ca_cert) = ca_cert {
@@ -229,7 +230,7 @@ impl<'a> NtContext<'a> {
     /// # Arguments
     ///
     /// `handler`: The local handler
-    pub async fn resolve_local(handler: &OffsetHandler) -> anyhow::Result<NtContext<'a>> {
+    pub async fn resolve_local(handler: &OffsetHandler) -> anyhow::Result<NtContext> {
         let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
         let request = tonic::Request::new(OffsetsRequest {
             ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
@@ -276,9 +277,10 @@ pub struct PortableExecutable<'a> {
     section_protections: Vec<ProtectionGuard>,
     loader_entry: Pin<Box<LDR_DATA_TABLE_ENTRY>>,
     ddag_node: Pin<Box<LDR_DDAG_NODE>>,
-    context: &'a NtContext<'a>,
+    context: NtContext,
     added_to_hash_tbl: bool,
     added_to_index: bool,
+    called_entry_point: bool,
     last_primary: Option<PVOID>,
 }
 
@@ -372,9 +374,9 @@ impl<'a> PortableExecutable<'a> {
     /// # Arguments
     ///
     /// `reason`: The reason for the call. Ex: `DLL_PROCESS_ATTACH`
-    fn call_entry_point(&mut self, reason: u32) -> u8 {
+    unsafe fn call_entry_point(&mut self, reason: u32) -> u8 {
         if let Some(entry_point) = &self.entry_point {
-            unsafe { entry_point(self.file.contents_mut(), reason, null_mut()) }
+            entry_point(self.file.contents_mut(), reason, null_mut())
         } else {
             0
         }
@@ -538,7 +540,7 @@ impl<'a> PortableExecutable<'a> {
     /// `context`: The resolved Nt Context
     pub fn load(
         path: &str,
-        context: &'a NtContext<'a>,
+        context: NtContext,
     ) -> Result<PortableExecutable<'a>, anyhow::Error> {
         PortableExecutable::load_as_primary(path, context, false)
     }
@@ -555,7 +557,7 @@ impl<'a> PortableExecutable<'a> {
     /// module, and be returned upon invocation of `GetModuleHandle(null)`
     pub fn load_as_primary(
         path: &str,
-        context: &'a NtContext<'a>,
+        context: NtContext,
         primary: bool,
     ) -> Result<PortableExecutable<'a>, anyhow::Error> {
         // first make sure we got all of the required functions
@@ -642,9 +644,10 @@ impl<'a> PortableExecutable<'a> {
                 CondenseLink: SINGLE_LIST_ENTRY::default(),
                 PreorderNumber: 0,
             }),
-            context,
+            context: context,
             added_to_hash_tbl: false,
             added_to_index: false,
+            called_entry_point: false,
             last_primary: None,
         };
         pe.init_ldr_entry()?;
@@ -846,9 +849,15 @@ impl<'a> PortableExecutable<'a> {
     /// # Safety
     ///
     /// The safety of this function is entirely dependent on whether or not
-    /// the underlying executable is safe
-    pub unsafe fn run(mut self) -> u8 {
-        self.call_entry_point(DLL_PROCESS_ATTACH)
+    /// the underlying executable is safe. This function panics if the executable
+    /// entry point has already been called
+    pub unsafe fn run(&mut self) -> u8 {
+        if self.called_entry_point {
+            panic!("OEP already called")
+        }
+        let res = self.call_entry_point(DLL_PROCESS_ATTACH);
+        self.called_entry_point = true;
+        res
     }
 
     /// Converts section flags to page protection flags
@@ -882,7 +891,7 @@ impl<'a> Drop for PortableExecutable<'a> {
             debug!("Failed to execute TLS callbacks on exit: {}", e.to_string())
         };
         // call the entry point with detach
-        self.call_entry_point(DLL_PROCESS_DETACH);
+        unsafe { self.call_entry_point(DLL_PROCESS_DETACH) };
         // disable exceptions afterwards in case a TLS callback uses them
         if let Err(e) = self.disable_exceptions() {
             debug!("Failed to disable exceptions: {}", e.to_string())
@@ -906,6 +915,8 @@ impl<'a> Drop for PortableExecutable<'a> {
     }
 }
 
+unsafe impl<'a> Send for PortableExecutable<'a> {}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -919,7 +930,7 @@ mod test {
     };
 
     lazy_static! {
-        static ref NT_CONTEXT: NtContext<'static> = Runtime::new()
+        static ref NT_CONTEXT: NtContext = Runtime::new()
             .unwrap()
             .block_on(NtContext::resolve_local(
                 &OffsetHandler::new("test/cache.json").unwrap()
@@ -930,7 +941,7 @@ mod test {
     #[test]
     #[serial]
     fn bad_dos() {
-        let err: std::io::Error = PortableExecutable::load("test/baddos.exe", &NT_CONTEXT)
+        let err: std::io::Error = PortableExecutable::load("test/baddos.exe", NT_CONTEXT.clone())
             .err()
             .unwrap()
             .downcast()
@@ -941,7 +952,7 @@ mod test {
     #[test]
     #[serial]
     fn bad_section() {
-        let err: std::io::Error = PortableExecutable::load("test/badsection.exe", &NT_CONTEXT)
+        let err: std::io::Error = PortableExecutable::load("test/badsection.exe", NT_CONTEXT.clone())
             .err()
             .unwrap()
             .downcast()
@@ -952,7 +963,7 @@ mod test {
     #[test]
     #[serial]
     fn bad_entry() {
-        let err: Error = PortableExecutable::load("test/badentry.exe", &NT_CONTEXT)
+        let err: Error = PortableExecutable::load("test/badentry.exe", NT_CONTEXT.clone())
             .err()
             .unwrap()
             .downcast()
@@ -963,7 +974,7 @@ mod test {
     #[test]
     #[serial]
     fn bad_mod() {
-        let err: std::io::Error = PortableExecutable::load("test/badmod.exe", &NT_CONTEXT)
+        let err: std::io::Error = PortableExecutable::load("test/badmod.exe", NT_CONTEXT.clone())
             .err()
             .unwrap()
             .downcast()
@@ -974,7 +985,7 @@ mod test {
     #[test]
     #[serial]
     fn bad_proc() {
-        let err: std::io::Error = PortableExecutable::load("test/badproc.exe", &NT_CONTEXT)
+        let err: std::io::Error = PortableExecutable::load("test/badproc.exe", NT_CONTEXT.clone())
             .err()
             .unwrap()
             .downcast()
@@ -986,7 +997,7 @@ mod test {
     #[test]
     #[serial]
     fn bad_arch() {
-        let err: Error = PortableExecutable::load("test/x86.exe", &NT_CONTEXT)
+        let err: Error = PortableExecutable::load("test/x86.exe", NT_CONTEXT.clone())
             .err()
             .unwrap()
             .downcast()
@@ -997,7 +1008,7 @@ mod test {
     #[test]
     #[serial]
     fn basic_image() {
-        let image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
+        let mut image = PortableExecutable::load("test/basic.exe", NT_CONTEXT.clone()).unwrap();
         unsafe {
             assert_eq!(image.run(), 23);
         }
@@ -1009,7 +1020,7 @@ mod test {
         let mut file_name_buf = [0 as u16; 128];
         let handle;
         {
-            let _image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
+            let _image = PortableExecutable::load("test/basic.exe", NT_CONTEXT.clone()).unwrap();
             handle = unsafe { GetModuleHandleW(to_wide("basic.exe").as_ptr()) };
             assert!(!handle.is_null());
             let name_len = unsafe {
@@ -1037,7 +1048,7 @@ mod test {
     #[test]
     #[serial]
     fn tls() {
-        let image = PortableExecutable::load("test/tls.exe", &NT_CONTEXT).unwrap();
+        let mut image = PortableExecutable::load("test/tls.exe", NT_CONTEXT.clone()).unwrap();
         unsafe {
             assert_eq!(image.run(), 7);
         }
@@ -1048,7 +1059,7 @@ mod test {
     fn primary_image() {
         let original_handle = unsafe { GetModuleHandleW(null()) };
         {
-            let mut image = PortableExecutable::load("test/basic.exe", &NT_CONTEXT).unwrap();
+            let mut image = PortableExecutable::load("test/basic.exe", NT_CONTEXT.clone()).unwrap();
             assert_ne!(image.module_handle(), unsafe { GetModuleHandleW(null()) });
             image.set_self_as_primary_image();
             assert_eq!(image.module_handle(), unsafe { GetModuleHandleW(null()) });

@@ -22,9 +22,9 @@ async fn main() -> anyhow::Result<()> {
     // fetch nt functions and constants
     let nt_ctx = NtContext::resolve(host, port).await?;
     // map the executable
-    let executable = PortableExecutable::load(&args[1], &nt_ctx)?;
+    let mut executable = PortableExecutable::load(&args[1], nt_ctx.clone())?;
     // map the dll
-    let dll = PortableExecutable::load(&args[2], &nt_ctx)?;
+    let mut dll = PortableExecutable::load(&args[2], nt_ctx)?;
     // run DllMain first
     if unsafe { dll.run() } == false as u8 {
         eprintln!("DllMain returned false!");

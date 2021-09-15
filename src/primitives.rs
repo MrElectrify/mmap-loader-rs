@@ -1,13 +1,7 @@
 use ntapi::ntrtl::{
     RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
 };
-use std::{
-    cell::UnsafeCell,
-    ffi::c_void,
-    io::Result,
-    ops::{Deref, DerefMut},
-    ptr::null_mut,
-};
+use std::{ffi::c_void, io::Result, ops::{Deref, DerefMut}, ptr::null_mut};
 use winapi::{
     shared::{minwindef::DWORD, ntdef::PRTL_BALANCED_NODE},
     um::{
@@ -112,14 +106,15 @@ pub struct ProtectionGuard {
 }
 
 /// A mutex based on an RTL Slim Read/Write lock
-pub struct RtlMutex<'a, T> {
-    val_ref: UnsafeCell<&'a mut T>,
-    lock_ref: UnsafeCell<&'a mut RTL_SRWLOCK>,
+#[derive(Clone)]
+pub struct RtlMutex<T> {
+    val_ref: *mut T,
+    lock_ref: *mut RTL_SRWLOCK,
 }
 
 /// A mutex guard that allows access to the value, and locks it upon `Drop`
 pub struct RtlMutexGuard<'a, T> {
-    mutex: &'a RtlMutex<'a, T>,
+    mutex: &'a RtlMutex<T>,
 }
 
 /// Writes to protected memory, enforcing a new protection for
@@ -203,11 +198,11 @@ impl Drop for ProtectionGuard {
     }
 }
 
-impl<'a, T> RtlMutex<'a, T> {
+impl<T> RtlMutex<T> {
     /// Locks the mutex and allows for access of the variable
-    pub fn lock(&'a self) -> RtlMutexGuard<'a, T> {
+    pub fn lock(&self) -> RtlMutexGuard<T> {
         unsafe {
-            RtlTryAcquireSRWLockExclusive(*self.lock_ref.get());
+            RtlTryAcquireSRWLockExclusive(self.lock_ref as *mut RTL_SRWLOCK);
         }
         RtlMutexGuard { mutex: self }
     }
@@ -218,33 +213,33 @@ impl<'a, T> RtlMutex<'a, T> {
     ///
     /// `val_ref`: The reference to the value protected by the lock
     /// `lock`: The lock
-    pub fn from_ref(val_ref: &'a mut T, lock_ref: &'a mut RTL_SRWLOCK) -> RtlMutex<'a, T> {
+    pub fn from_ref(val_ref: *mut T, lock_ref: *mut RTL_SRWLOCK) -> RtlMutex<T> {
         RtlMutex {
-            val_ref: UnsafeCell::new(val_ref),
-            lock_ref: UnsafeCell::new(lock_ref),
+            val_ref,
+            lock_ref,
         }
     }
 }
 
-unsafe impl<'a, T> Send for RtlMutex<'a, T> {}
-unsafe impl<'a, T> Sync for RtlMutex<'a, T> {}
+unsafe impl<'a, T> Send for RtlMutex<T> {}
+unsafe impl<'a, T> Sync for RtlMutex<T> {}
 
 impl<'a, T> Deref for RtlMutexGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { *self.mutex.val_ref.get() }
+        unsafe { &*self.mutex.val_ref }
     }
 }
 
 impl<'a, T> DerefMut for RtlMutexGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { *self.mutex.val_ref.get() }
+        unsafe { &mut *self.mutex.val_ref }
     }
 }
 
 impl<'a, T> Drop for RtlMutexGuard<'a, T> {
     fn drop(&mut self) {
-        unsafe { RtlReleaseSRWLockExclusive(*self.mutex.lock_ref.get()) }
+        unsafe { RtlReleaseSRWLockExclusive(self.mutex.lock_ref as *mut RTL_SRWLOCK) }
     }
 }

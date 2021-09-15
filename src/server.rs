@@ -1,32 +1,21 @@
-use crate::{
-    db::{Offsets, OffsetsDatabase},
-    offsets::{
-        offset_server::Offset,
-        OffsetsRequest, OffsetsResponse,
-    },
-};
 #[cfg(feature = "server")]
 use crate::offsets::offset_server::OffsetServer;
+use crate::{
+    db::{Offsets, OffsetsDatabase},
+    offsets::{offset_server::Offset, OffsetsRequest, OffsetsResponse},
+};
 use pdb::{FallibleIterator, Source, SymbolData, SymbolTable, PDB};
 use reqwest::StatusCode;
-use std::{
-    borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor,
-    path::PathBuf,
-};
 #[cfg(feature = "server")]
 use std::net::SocketAddr;
+use std::{borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, path::PathBuf};
 use tokio::fs::write;
 use tokio::sync::Mutex;
-use tonic::{
-    Request, Response, Status,
-};
-#[cfg(feature = "server")]
-use tonic::{
-    transport,
-    transport::Identity,
-};
 #[cfg(all(feature = "server", feature = "tls"))]
 use tonic::transport::ServerTlsConfig;
+#[cfg(feature = "server")]
+use tonic::{transport, transport::Identity};
+use tonic::{Request, Response, Status};
 
 /// The actual handler for Offset requests. Owns an internal database
 pub struct OffsetHandler {
@@ -292,11 +281,7 @@ mod test {
         let request = Request::new(OffsetsRequest {
             ntdll_hash: "46F6F5C30E7147E46F2A953A5DAF201A1".into(),
         });
-        let response = handler
-            .get_offsets(request)
-            .await
-            .unwrap()
-            .into_inner();
+        let response = handler.get_offsets(request).await.unwrap().into_inner();
         // ensure it was cached
         assert!(handler
             .database

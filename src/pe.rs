@@ -20,10 +20,18 @@ use ntapi::{
         RtlRbRemoveNode, HASH_STRING_ALGORITHM_DEFAULT, RTL_RB_TREE,
     },
 };
-use std::{ffi::{CStr, OsString, c_void}, os::windows::prelude::OsStrExt, path::Path, pin::Pin, ptr, ptr::null_mut, os::windows::prelude::*};
-use tonic::transport::Channel;
+use std::{
+    ffi::{c_void, CStr, OsString},
+    os::windows::prelude::OsStrExt,
+    os::windows::prelude::*,
+    path::Path,
+    pin::Pin,
+    ptr,
+    ptr::null_mut,
+};
 #[cfg(feature = "tls")]
 use tonic::transport::Certificate;
+use tonic::transport::Channel;
 #[cfg(feature = "tls")]
 use tonic::transport::ClientTlsConfig;
 use winapi::{
@@ -557,13 +565,24 @@ impl<'a> PortableExecutable<'a> {
             .file_name()
             .ok_or_else(|| std::io::Error::from_raw_os_error(ERROR_FILE_NOT_FOUND as i32))?
             .encode_wide()
+            .chain(std::iter::once(0))
             .collect();
         // remove the "extended length path syntax"
-        let file_path: Vec<u16> = path.canonicalize()?.as_os_str().encode_wide().skip(4).collect();
+        let file_path: Vec<u16> = path
+            .canonicalize()?
+            .as_os_str()
+            .encode_wide()
+            .skip(4)
+            .chain(std::iter::once(0))
+            .collect();
         debug!(
             "Loading {} at path {}",
-            OsString::from_wide(&file_name[..]).as_os_str().to_string_lossy(),
-            OsString::from_wide(&file_path[..]).as_os_str().to_string_lossy()
+            OsString::from_wide(&file_name[..])
+                .as_os_str()
+                .to_string_lossy(),
+            OsString::from_wide(&file_path[..])
+                .as_os_str()
+                .to_string_lossy()
         );
         let (nt_headers, section_headers) = PortableExecutable::load_headers(&mut file)?;
         let entry_point = PortableExecutable::load_entry_point(&mut file, nt_headers)?;
@@ -902,7 +921,9 @@ mod test {
     lazy_static! {
         static ref NT_CONTEXT: NtContext<'static> = Runtime::new()
             .unwrap()
-            .block_on(NtContext::resolve_local(&OffsetHandler::new("test/cache.json").unwrap()))
+            .block_on(NtContext::resolve_local(
+                &OffsetHandler::new("test/cache.json").unwrap()
+            ))
             .unwrap();
     }
 

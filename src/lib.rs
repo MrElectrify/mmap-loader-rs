@@ -16,4 +16,5 @@ mod util;
 
 #[cfg(target_os = "windows")]
 /// Exported for simple uses
+pub use error::Error;
 pub use pe::{NtContext, PortableExecutable};

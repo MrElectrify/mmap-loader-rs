@@ -75,7 +75,8 @@ pub struct NtContext {
 
 unsafe impl Send for NtContext {}
 
-pub struct Module(*const u8);
+/// This allows us to hold a pointer across a wait point
+struct Module(*const u8);
 
 unsafe impl Send for Module {}
 

@@ -73,6 +73,12 @@ pub struct NtContext {
     LdrpModuleBaseAddressIndex: RtlMutex<RTL_RB_TREE>,
 }
 
+unsafe impl Send for NtContext {}
+
+pub struct Module(*const u8);
+
+unsafe impl Send for Module {}
+
 impl NtContext {
     /// Gets the loaded NTDLL hash
     ///
@@ -173,12 +179,13 @@ impl NtContext {
             server_port
         ))?;
         let mut client = OffsetClient::new(channel.connect().await?);
-        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        // wrap this in a `Module` so we can send it across await points
+        let ntdll = Module(unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 });
         let request = tonic::Request::new(OffsetsRequest {
-            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll.0)?,
         });
         let response = client.get_offsets(request).await?.into_inner();
-        Ok(NtContext::process_response(response, ntdll))
+        Ok(NtContext::process_response(response, ntdll.0))
     }
 
     /// Resolves the context used by the mapper, over a secure TLS connection
@@ -217,12 +224,13 @@ impl NtContext {
         ))?
         .tls_config(tls_config)?;
         let mut client = OffsetClient::new(channel.connect().await?);
-        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        // wrap this in a `Module` so we can send it across await points
+        let ntdll = Module(unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 });
         let request = tonic::Request::new(OffsetsRequest {
-            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll.0)?,
         });
         let response = client.get_offsets(request).await?.into_inner();
-        Ok(NtContext::process_response(response, ntdll))
+        Ok(NtContext::process_response(response, ntdll.0))
     }
 
     /// Resolves the context used by the mapper
@@ -231,12 +239,13 @@ impl NtContext {
     ///
     /// `handler`: The local handler
     pub async fn resolve_local(handler: &OffsetHandler) -> anyhow::Result<NtContext> {
-        let ntdll = unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 };
+        // wrap this in a `Module` so we can send it across await points
+        let ntdll = Module(unsafe { GetModuleHandleW(to_wide("ntdll").as_ptr()) as *const u8 });
         let request = tonic::Request::new(OffsetsRequest {
-            ntdll_hash: NtContext::get_ntdll_hash(ntdll)?,
+            ntdll_hash: NtContext::get_ntdll_hash(ntdll.0)?,
         });
         let response = handler.get_offsets(request).await?.into_inner();
-        Ok(NtContext::process_response(response, ntdll))
+        Ok(NtContext::process_response(response, ntdll.0))
     }
 }
 

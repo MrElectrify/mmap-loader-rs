@@ -1,7 +1,12 @@
 use ntapi::ntrtl::{
     RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
 };
-use std::{ffi::c_void, io::Result, ops::{Deref, DerefMut}, ptr::null_mut};
+use std::{
+    ffi::c_void,
+    io::Result,
+    ops::{Deref, DerefMut},
+    ptr::null_mut,
+};
 use winapi::{
     shared::{minwindef::DWORD, ntdef::PRTL_BALANCED_NODE},
     um::{
@@ -214,10 +219,7 @@ impl<T> RtlMutex<T> {
     /// `val_ref`: The reference to the value protected by the lock
     /// `lock`: The lock
     pub fn from_ref(val_ref: *mut T, lock_ref: *mut RTL_SRWLOCK) -> RtlMutex<T> {
-        RtlMutex {
-            val_ref,
-            lock_ref,
-        }
+        RtlMutex { val_ref, lock_ref }
     }
 }
 

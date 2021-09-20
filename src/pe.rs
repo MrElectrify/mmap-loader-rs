@@ -442,13 +442,17 @@ impl<'a> PortableExecutable<'a> {
             .file
             .get_rva::<IMAGE_TLS_DIRECTORY>(tls_directory.VirtualAddress as isize)
             .ok_or(Error::TLSOutOfBounds)?;
-        let mut tls_callback = unsafe {
-            self.file
-                .get_rva::<Option<unsafe extern "stdcall" fn(PVOID, u32, PVOID)>>(
-                    ((*tls_directory).AddressOfCallBacks - self.file.contents() as u64) as isize,
-                )
-                .ok_or(Error::CallbackOutOfBounds)?
-        };
+        let tls_callbacks = unsafe { (*tls_directory).AddressOfCallBacks };
+        // it is possible that callbacks may not exist
+        if tls_callbacks == 0 {
+            return Ok(());
+        }
+        let mut tls_callback = self
+            .file
+            .get_rva::<Option<unsafe extern "stdcall" fn(PVOID, u32, PVOID)>>(
+                (tls_callbacks - self.file.contents() as u64) as isize,
+            )
+            .ok_or(Error::CallbackOutOfBounds)?;
         // execute all of the TLS callbacks
         unsafe {
             while (*tls_callback).is_some() {
@@ -548,10 +552,7 @@ impl<'a> PortableExecutable<'a> {
     /// `path`: The path to the executable file
     ///
     /// `context`: The resolved Nt Context
-    pub fn load(
-        path: &str,
-        context: NtContext,
-    ) -> Result<PortableExecutable<'a>, anyhow::Error> {
+    pub fn load(path: &str, context: NtContext) -> Result<PortableExecutable<'a>, anyhow::Error> {
         PortableExecutable::load_as_primary(path, context, false)
     }
 
@@ -962,11 +963,12 @@ mod test {
     #[test]
     #[serial]
     fn bad_section() {
-        let err: std::io::Error = PortableExecutable::load("test/badsection.exe", NT_CONTEXT.clone())
-            .err()
-            .unwrap()
-            .downcast()
-            .unwrap();
+        let err: std::io::Error =
+            PortableExecutable::load("test/badsection.exe", NT_CONTEXT.clone())
+                .err()
+                .unwrap()
+                .downcast()
+                .unwrap();
         assert_eq!(err.raw_os_error().unwrap(), ERROR_BAD_EXE_FORMAT as i32);
     }
 

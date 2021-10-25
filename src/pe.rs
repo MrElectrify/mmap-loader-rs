@@ -365,6 +365,22 @@ impl<'a> PortableExecutable<'a> {
         self.added_to_index = true;
     }
 
+    /// Adds the module to the PEB structures
+    fn add_to_peb(&mut self) {
+        unsafe {
+            let peb = NtCurrentPeb();
+            let ldr = (*peb).Ldr;
+            InsertTailList(
+                &mut (*ldr).InLoadOrderModuleList,
+                &mut self.loader_entry.InLoadOrderLinks
+            );
+            InsertTailList(
+                &mut (*ldr).InMemoryOrderModuleList,
+                &mut self.loader_entry.InMemoryOrderLinks
+            );
+        }
+    }
+    
     /// Removes the module from the index red-black trees
     fn remove_from_index(&mut self) {
         unsafe {
@@ -542,6 +558,8 @@ impl<'a> PortableExecutable<'a> {
         self.add_to_hash_table();
         // add to the red-black trees for traversal
         self.add_to_index();
+        // add to the PEB linked lists
+        self.add_to_peb();
         Ok(())
     }
 
@@ -619,7 +637,7 @@ impl<'a> PortableExecutable<'a> {
                 FullDllName: UNICODE_STRING::default(),
                 BaseDllName: UNICODE_STRING::default(),
                 u2: LDR_DATA_TABLE_ENTRY_u2 { Flags: 0 },
-                ObsoleteLoadCount: 0,
+                ObsoleteLoadCount: u16::MAX,
                 TlsIndex: 0,
                 HashLinks: LIST_ENTRY::default(),
                 TimeDateStamp: 0,

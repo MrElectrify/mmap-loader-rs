@@ -1,3 +1,5 @@
+#![allow(clippy::nonstandard_macro_braces)]
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 /// An error code associated with loading a PE file
 pub enum Error {

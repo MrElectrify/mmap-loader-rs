@@ -11,8 +11,8 @@ use winapi::um::{fileapi::*, memoryapi::*, winbase::*, winnt::*};
 // A mapped executable image file in the process's address space
 #[derive(Debug)]
 pub struct MappedFile {
-    file: Handle,
-    mapping: Handle,
+    _file: Handle,
+    _mapping: Handle,
     contents: *mut c_void,
 }
 
@@ -133,8 +133,8 @@ impl MappedFile {
                 return Err(Error::last_os_error());
             }
             Ok(Self {
-                file,
-                mapping,
+                _file: file,
+                _mapping: mapping,
                 contents,
             })
         }

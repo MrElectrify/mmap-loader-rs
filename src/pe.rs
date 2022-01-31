@@ -290,6 +290,7 @@ pub struct PortableExecutable<'a> {
     context: NtContext,
     added_to_hash_tbl: bool,
     added_to_index: bool,
+    added_to_peb: bool,
     called_entry_point: bool,
     last_primary: Option<PVOID>,
 }
@@ -349,9 +350,7 @@ impl<'a> PortableExecutable<'a> {
                         || ((*l).TimeDateStamp <= (*r).TimeDateStamp
                             && (*l).SizeOfImage < (*r).SizeOfImage)
                 },
-            )
-        }
-        unsafe {
+            );
             rtl_rb_tree_insert(
                 &mut self.context.LdrpModuleBaseAddressIndex.lock(),
                 &mut self.loader_entry.BaseAddressIndexNode,
@@ -365,6 +364,20 @@ impl<'a> PortableExecutable<'a> {
         self.added_to_index = true;
     }
 
+    /// Removes the module from the index red-black trees
+    fn remove_from_index(&mut self) {
+        unsafe {
+            RtlRbRemoveNode(
+                &mut (*self.context.LdrpMappingInfoIndex.lock()),
+                &mut self.loader_entry.MappingInfoIndexNode,
+            );
+            RtlRbRemoveNode(
+                &mut (*self.context.LdrpModuleBaseAddressIndex.lock()),
+                &mut self.loader_entry.BaseAddressIndexNode,
+            );
+        }
+    }
+    
     /// Adds the module to the PEB structures
     fn add_to_peb(&mut self) {
         unsafe {
@@ -379,22 +392,21 @@ impl<'a> PortableExecutable<'a> {
                 &mut self.loader_entry.InMemoryOrderLinks
             );
         }
+        self.added_to_peb = true;
     }
-    
-    /// Removes the module from the index red-black trees
-    fn remove_from_index(&mut self) {
+
+    /// Removes the modules from the PEB structures
+    fn remove_from_peb(&mut self) {
         unsafe {
-            RtlRbRemoveNode(
-                &mut (*self.context.LdrpMappingInfoIndex.lock()),
-                &mut self.loader_entry.MappingInfoIndexNode,
+            RemoveEntryList(
+                &mut self.loader_entry.InLoadOrderLinks
             );
-            RtlRbRemoveNode(
-                &mut (*self.context.LdrpModuleBaseAddressIndex.lock()),
-                &mut self.loader_entry.BaseAddressIndexNode,
+            RemoveEntryList(
+                &mut self.loader_entry.InMemoryOrderLinks
             );
         }
     }
-
+    
     /// Calls the function entry point
     ///
     /// # Arguments
@@ -676,6 +688,7 @@ impl<'a> PortableExecutable<'a> {
             context,
             added_to_hash_tbl: false,
             added_to_index: false,
+            added_to_peb: false,
             called_entry_point: false,
             last_primary: None,
         };
@@ -924,6 +937,10 @@ impl<'a> Drop for PortableExecutable<'a> {
         // disable exceptions afterwards in case a TLS callback uses them
         if let Err(e) = self.disable_exceptions() {
             debug!("Failed to disable exceptions: {}", e.to_string())
+        }
+        // remove ourselves from the PEB
+        if self.added_to_peb {
+            self.remove_from_peb();
         }
         // remove ourselves from the index RB trees
         if self.added_to_index {

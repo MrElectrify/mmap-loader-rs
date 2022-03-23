@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "mmap-loader"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "anyhow",
  "lazy_static",

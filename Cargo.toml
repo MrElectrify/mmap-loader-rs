@@ -47,9 +47,12 @@ tonic-build = "0.6"
 [dependencies]
 anyhow = "1"
 lazy_static = "1.4"
-log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
+log = { version = "0.4", features = [
+    "max_level_debug",
+    "release_max_level_warn",
+] }
 memoffset = "0.6"
-ntapi = { version = "0.3", git = "https://github.com/MrElectrify/ntapi", features = ["beta"] }
+ntapi = { version = "0.3.7", features = ["beta"] }
 pdb = "0.7"
 prost = "0.9"
 reqwest = "0.11"
@@ -60,11 +63,19 @@ simple_logger = { version = "2.1" }
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["fs", "macros", "rt-multi-thread"] }
 tonic = "0.6"
-winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "handleapi", "memoryapi", "std", "winbase"] }
+winapi = { version = "0.3", features = [
+    "impl-default",
+    "fileapi",
+    "guiddef",
+    "handleapi",
+    "memoryapi",
+    "std",
+    "winbase",
+] }
 
 [dev-dependencies]
-serial_test = "0.5"
+serial_test = "0.6"
 
 [package.metadata.docs.rs]
-features = ["server"]
+features = ["server", "tls"]
 targets = ["x86_64-pc-windows-gnu", "x86_64-unknown-linux-gnu"]

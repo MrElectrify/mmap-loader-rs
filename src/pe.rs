@@ -377,7 +377,7 @@ impl<'a> PortableExecutable<'a> {
             );
         }
     }
-    
+
     /// Adds the module to the PEB structures
     fn add_to_peb(&mut self) {
         unsafe {
@@ -385,11 +385,11 @@ impl<'a> PortableExecutable<'a> {
             let ldr = (*peb).Ldr;
             InsertTailList(
                 &mut (*ldr).InLoadOrderModuleList,
-                &mut self.loader_entry.InLoadOrderLinks
+                &mut self.loader_entry.InLoadOrderLinks,
             );
             InsertTailList(
                 &mut (*ldr).InMemoryOrderModuleList,
-                &mut self.loader_entry.InMemoryOrderLinks
+                &mut self.loader_entry.InMemoryOrderLinks,
             );
         }
         self.added_to_peb = true;
@@ -398,15 +398,11 @@ impl<'a> PortableExecutable<'a> {
     /// Removes the modules from the PEB structures
     fn remove_from_peb(&mut self) {
         unsafe {
-            RemoveEntryList(
-                &mut self.loader_entry.InLoadOrderLinks
-            );
-            RemoveEntryList(
-                &mut self.loader_entry.InMemoryOrderLinks
-            );
+            RemoveEntryList(&mut self.loader_entry.InLoadOrderLinks);
+            RemoveEntryList(&mut self.loader_entry.InMemoryOrderLinks);
         }
     }
-    
+
     /// Calls the function entry point
     ///
     /// # Arguments

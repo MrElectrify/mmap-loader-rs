@@ -166,12 +166,7 @@ impl Offset for OffsetHandler {
         .await
         {
             Ok(response) => response,
-            Err(e) => {
-                return Err(Status::not_found(format!(
-                    "Error on fetch: {}",
-                    e.to_string()
-                )))
-            }
+            Err(e) => return Err(Status::not_found(format!("Error on fetch: {}", e))),
         };
         let status = pdb.status();
         match status {
@@ -186,10 +181,7 @@ impl Offset for OffsetHandler {
         let pdb = match pdb.bytes().await {
             Ok(bytes) => bytes,
             Err(e) => {
-                return Err(Status::internal(format!(
-                    "Error on bytes: {}",
-                    e.to_string()
-                )));
+                return Err(Status::internal(format!("Error on bytes: {}", e)));
             }
         };
         let offsets = match get_offsets_from_pdb_bytes(Cursor::new(&pdb)) {
@@ -197,8 +189,7 @@ impl Offset for OffsetHandler {
             Err(e) => {
                 return Err(Status::internal(format!(
                     "Processing error: {}. Bytes: {:?}",
-                    e.to_string(),
-                    pdb
+                    e, pdb
                 )));
             }
         };
@@ -214,11 +205,7 @@ impl Offset for OffsetHandler {
         let s = match serde_json::to_string::<OffsetsDatabase>(&*database) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "Failed to serialize database: {}. DB: {:?}",
-                    e.to_string(),
-                    database
-                );
+                eprintln!("Failed to serialize database: {}. DB: {:?}", e, database);
                 return Ok(Response::new(offsets.into()));
             }
         };
@@ -228,7 +215,7 @@ impl Offset for OffsetHandler {
                 eprintln!(
                     "Failed to write database to cache file {}: {}. Payload: {}",
                     &self.cache_path.as_path().to_string_lossy(),
-                    e.to_string(),
+                    e,
                     &s
                 )
             }

@@ -11,11 +11,14 @@ use std::net::SocketAddr;
 use std::{borrow::Cow, collections::HashMap, fs::read_to_string, io::Cursor, path::PathBuf};
 use tokio::fs::write;
 use tokio::sync::Mutex;
-#[cfg(all(feature = "server", feature = "tls"))]
-use tonic::transport::ServerTlsConfig;
 #[cfg(feature = "server")]
-use tonic::{transport, transport::Identity};
+use tonic::transport;
+#[cfg(all(feature = "server", feature = "tls"))]
+use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
+
+#[cfg(not(feature = "tls"))]
+pub struct Identity {}
 
 /// The actual handler for Offset requests. Owns an internal database
 pub struct OffsetHandler {
@@ -127,6 +130,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
     let ldrp_release_tls_entry = *get_offset!(map, "LdrpReleaseTlsEntry");
     let ldrp_mapping_info_index = *get_offset!(map, "LdrpMappingInfoIndex");
     let ldrp_module_base_address_index = *get_offset!(map, "LdrpModuleBaseAddressIndex");
+    let rtl_initialize_history_table = *get_offset!(map, "RtlInitializeHistoryTable");
     Ok(Some(Offsets {
         ldrp_hash_table,
         ldrp_module_datatable_lock,
@@ -134,6 +138,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         ldrp_release_tls_entry,
         ldrp_mapping_info_index,
         ldrp_module_base_address_index,
+        rtl_initialize_history_table,
     }))
 }
 

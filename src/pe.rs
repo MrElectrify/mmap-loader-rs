@@ -16,8 +16,8 @@ use ntapi::{
     },
     ntpsapi::NtCurrentPeb,
     ntrtl::{
-        InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlInitUnicodeString,
-        RtlRbRemoveNode, HASH_STRING_ALGORITHM_DEFAULT, RTL_RB_TREE,
+        InsertTailList, RemoveEntryList, RtlHashUnicodeString, RtlImageDirectoryEntryToData,
+        RtlInitUnicodeString, RtlRbRemoveNode, HASH_STRING_ALGORITHM_DEFAULT, RTL_RB_TREE,
     },
 };
 use std::{
@@ -71,6 +71,7 @@ pub struct NtContext {
     LdrpReleaseTlsEntry: unsafe extern "stdcall" fn(*mut LDR_DATA_TABLE_ENTRY, null: usize) -> i32,
     LdrpMappingInfoIndex: RtlMutex<RTL_RB_TREE>,
     LdrpModuleBaseAddressIndex: RtlMutex<RTL_RB_TREE>,
+    RtlInitializeHistoryTable: unsafe extern "stdcall" fn(),
 }
 
 unsafe impl Send for NtContext {}
@@ -158,6 +159,9 @@ impl NtContext {
                         as *mut RTL_RB_TREE),
                     &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
                         as *mut RTL_SRWLOCK),
+                ),
+                RtlInitializeHistoryTable: std::mem::transmute(
+                    ntdll.offset(response.rtl_initialize_history_table as isize),
                 ),
             }
         }
@@ -419,7 +423,7 @@ impl<'a> PortableExecutable<'a> {
     /// Enables exception handling for the module
     fn enable_exceptions(&mut self) -> Result<(), Error> {
         // get the exception table
-        let exception_table = self.get_exception_table()?;
+        let exception_table = self.get_exception_table();
         if exception_table.is_empty() {
             return Ok(());
         }
@@ -433,13 +437,14 @@ impl<'a> PortableExecutable<'a> {
         } {
             return Err(Error::ExceptionTableEntry);
         }
+        unsafe { (self.context.RtlInitializeHistoryTable)() }
         Ok(())
     }
 
     /// Disables exception handling for the module
     fn disable_exceptions(&mut self) -> Result<(), Error> {
         // get the exception table
-        let exception_table = self.get_exception_table()?;
+        let exception_table = self.get_exception_table();
         if exception_table.is_empty() {
             return Ok(());
         }
@@ -512,23 +517,22 @@ impl<'a> PortableExecutable<'a> {
     }
 
     /// Gets the exception table for the module, and its size
-    fn get_exception_table(&mut self) -> Result<&'a mut [IMAGE_RUNTIME_FUNCTION_ENTRY], Error> {
-        let exception_dir =
-            &self.nt_headers.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION as usize];
-        if exception_dir.VirtualAddress == 0 {
-            // there is no exception table
-            return Ok(&mut []);
-        }
-        let exception_table = self
-            .file
-            .get_rva_mut::<IMAGE_RUNTIME_FUNCTION_ENTRY>(exception_dir.VirtualAddress as isize)
-            .ok_or(Error::ExceptionTableOutOfBounds)?;
-        return Ok(unsafe {
+    fn get_exception_table(&mut self) -> &'a mut [IMAGE_RUNTIME_FUNCTION_ENTRY] {
+        let mut size: u32 = 0;
+        let table = unsafe {
+            std::mem::transmute(RtlImageDirectoryEntryToData(
+                self.file.contents_mut(),
+                1,
+                IMAGE_DIRECTORY_ENTRY_EXCEPTION,
+                &mut size,
+            ))
+        };
+        unsafe {
             std::slice::from_raw_parts_mut(
-                exception_table,
-                exception_dir.Size as usize / std::mem::size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>(),
+                table,
+                size as usize / std::mem::size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>(),
             )
-        });
+        }
     }
 
     /// Initializes the loader entry

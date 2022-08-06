@@ -3,8 +3,8 @@ name = "mmap-loader"
 authors = ["Andrew Buck"]
 description = "A Portable Executable manual map loader"
 documentation = "https://docs.rs/crate/mmap-loader"
-version = "0.4.5"
-edition = "2018"
+version = "0.4.6"
+edition = "2021"
 license-file = "LICENSE"
 readme = "README.md"
 repository = "https://github.com/MrElectrify/mmap-loader-rs"
@@ -42,7 +42,7 @@ name = "print_return_no_server"
 path = "examples/print_return_no_server.rs"
 
 [build-dependencies]
-tonic-build = "0.6"
+tonic-build = { version = "0.7", features = ["prost"] }
 
 [dependencies]
 anyhow = "1"
@@ -53,8 +53,8 @@ log = { version = "0.4", features = [
 ] }
 memoffset = "0.6"
 ntapi = { version = "0.3.7", features = ["beta"] }
-pdb = "0.7"
-prost = "0.9"
+pdb = "0.8"
+prost = "0.10"
 reqwest = "0.11"
 serde = "1.0"
 serde_derive = "1.0"
@@ -62,7 +62,7 @@ serde_json = "1.0"
 simple_logger = { version = "2.1" }
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["fs", "macros", "rt-multi-thread"] }
-tonic = "0.6"
+tonic = "0.7"
 winapi = { version = "0.3", features = [
     "impl-default",
     "fileapi",
@@ -74,7 +74,7 @@ winapi = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
-serial_test = "0.6"
+serial_test = "0.8"
 
 [package.metadata.docs.rs]
 features = ["server"]

@@ -1,7 +1,7 @@
 # mmap-loader-rs
 A Windows Portable Executable Manual Map Loader that supports both executable and DLL types. Written in Rust
 
-[Crate](https://crates.io/crates/mmap-loader) | [Documentation (excl TLS)](https://docs.rs/mmap-loader/0.4.4/mmap_loader/)
+[Crate](https://crates.io/crates/mmap-loader) | [Documentation (excl TLS)](https://docs.rs/crate/mmap-loader)
 
 ## Requirements
 - A 1.58+ beta compiler. This is due to the `ntapi` dependency needing inline assembly for gswords and fswords, and `asm` still not being stable.

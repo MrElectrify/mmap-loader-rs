@@ -1,12 +1,7 @@
 use ntapi::ntrtl::{
     RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
 };
-use std::{
-    ffi::c_void,
-    io::Result,
-    ops::{Deref, DerefMut},
-    ptr::null_mut,
-};
+use std::{ffi::c_void, io::Result, ops::{Deref, DerefMut}, ptr, ptr::null_mut};
 use winapi::{
     shared::{minwindef::DWORD, ntdef::PRTL_BALANCED_NODE},
     um::{
@@ -137,7 +132,7 @@ pub unsafe fn protected_write<T>(addr: *mut T, val: T) -> Result<()> {
         PAGE_READWRITE,
     )?;
     // write the value
-    *addr = val;
+    ptr::write_unaligned(addr, val);
     Ok(())
 }
 

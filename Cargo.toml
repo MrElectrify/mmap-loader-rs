@@ -3,7 +3,7 @@ name = "mmap-loader"
 authors = ["Andrew Buck"]
 description = "A Portable Executable manual map loader"
 documentation = "https://docs.rs/crate/mmap-loader"
-version = "0.4.6"
+version = "0.5.0"
 edition = "2021"
 license-file = "LICENSE"
 readme = "README.md"
@@ -42,7 +42,7 @@ name = "print_return_no_server"
 path = "examples/print_return_no_server.rs"
 
 [build-dependencies]
-tonic-build = { version = "0.7", features = ["prost"] }
+tonic-build = { version = "0.11", features = ["prost"] }
 
 [dependencies]
 anyhow = "1"
@@ -51,30 +51,22 @@ log = { version = "0.4", features = [
     "max_level_debug",
     "release_max_level_warn",
 ] }
-memoffset = "0.6"
-ntapi = { version = "0.3.7", features = ["beta"] }
+memoffset = "0.9"
+ntapi = "0.4"
 pdb = "0.8"
-prost = "0.10"
-reqwest = "0.11"
+prost = "0.12"
+reqwest = "0.12"
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
-simple_logger = { version = "2.1" }
+simple_logger = { version = "4.3" }
 thiserror = "1.0"
-tokio = { version = "1.0", features = ["fs", "macros", "rt-multi-thread"] }
-tonic = "0.7"
-winapi = { version = "0.3", features = [
-    "impl-default",
-    "fileapi",
-    "guiddef",
-    "handleapi",
-    "memoryapi",
-    "std",
-    "winbase",
-] }
+tokio = { version = "1.37", features = ["fs", "macros", "rt-multi-thread"] }
+tonic = "0.11"
+winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "handleapi", "memoryapi", "std", "winbase", "ntdef", "ntstatus", "libloaderapi", "winnt"] }
 
 [dev-dependencies]
-serial_test = "0.8"
+serial_test = "3.0"
 
 [package.metadata.docs.rs]
 features = ["server"]

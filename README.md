@@ -4,7 +4,7 @@ A Windows Portable Executable Manual Map Loader that supports both executable an
 [Crate](https://crates.io/crates/mmap-loader) | [Documentation (excl TLS)](https://docs.rs/mmap-loader/0.4.4/mmap_loader/)
 
 ## Requirements
-- A 1.58+ beta compiler. This is due to the `ntapi` dependency needing inline assembly for gswords and fswords, and `asm` still not being stable.
+- A 1.77.1+ stable compiler.
 
 ## Features
 - Supports both DLL and EXE types

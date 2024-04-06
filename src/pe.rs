@@ -103,7 +103,7 @@ impl NtContext {
                 return Err(Error::NtDllDebugType);
             }
             let codeview_entry = &*((dos_header as *const u8)
-                .offset((*debug_entry).AddressOfRawData as isize)
+                .offset(debug_entry.AddressOfRawData as isize)
                 as *const IMAGE_DEBUG_CODEVIEW);
             if !codeview_entry
                 .rsds_signature

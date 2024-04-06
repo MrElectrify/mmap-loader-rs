@@ -29,10 +29,8 @@ use std::{
     ptr,
     ptr::null_mut,
 };
-#[cfg(feature = "tls")]
 use tonic::transport::Certificate;
 use tonic::transport::Channel;
-#[cfg(feature = "tls")]
 use tonic::transport::ClientTlsConfig;
 use winapi::{
     shared::{
@@ -206,7 +204,6 @@ impl NtContext {
     /// will use their store to verify the endpoint
     ///
     /// `domain`: The domain name to be verified
-    #[cfg(feature = "tls")]
     pub async fn resolve_tls<S: AsRef<str>>(
         server_hostname: S,
         server_port: u16,
@@ -1116,7 +1113,7 @@ mod test {
 
     #[tokio::test]
     #[serial]
-    #[cfg(all(feature = "tls", feature = "server"))]
+    #[cfg(feature = "server")]
     async fn tls_server() {
         use crate::server::Server;
         use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};

@@ -13,12 +13,9 @@ use tokio::fs::write;
 use tokio::sync::Mutex;
 #[cfg(feature = "server")]
 use tonic::transport;
-#[cfg(all(feature = "server", feature = "tls"))]
+#[cfg(feature = "server")]
 use tonic::transport::{Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status};
-
-#[cfg(not(feature = "tls"))]
-pub struct Identity {}
 
 /// The actual handler for Offset requests. Owns an internal database
 pub struct OffsetHandler {
@@ -64,7 +61,6 @@ impl Server {
     pub async fn run(self) -> Result<(), anyhow::Error> {
         let endpoint = self.endpoint;
         let mut server = transport::Server::builder();
-        #[cfg(feature = "tls")]
         if let Some(tls_identity) = self.tls_identity {
             server = server.tls_config(ServerTlsConfig::new().identity(tls_identity))?;
         }

@@ -4,3 +4,4 @@ src/main.rs
 target/
 test/cache.json
 test/tls_cache.json
+.idea/

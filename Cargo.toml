@@ -10,10 +10,6 @@ readme = "README.md"
 repository = "https://github.com/MrElectrify/mmap-loader-rs"
 keywords = ["pe", "map", "manual-map"]
 
-[features]
-tls = ["tonic/tls", "tonic/tls-roots"]
-server = []
-
 [[bin]]
 name = "mmap-offset-server"
 path = "src/offset-server.rs"
@@ -31,7 +27,6 @@ path = "examples/print_return.rs"
 [[example]]
 name = "print_return_tls"
 path = "examples/print_return_tls.rs"
-required-features = ["tls"]
 
 [[example]]
 name = "print_return_with_dll"
@@ -62,7 +57,7 @@ serde_json = "1.0"
 simple_logger = { version = "4.3" }
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["fs", "macros", "rt-multi-thread"] }
-tonic = "0.11"
+tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 winapi = { version = "0.3", features = ["impl-default", "fileapi", "guiddef", "handleapi", "memoryapi", "std", "winbase", "ntdef", "ntstatus", "libloaderapi", "winnt"] }
 
 [dev-dependencies]

@@ -140,9 +140,11 @@ impl NtContext {
                     &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
                         as *mut RTL_SRWLOCK),
                 ),
+                #[allow(clippy::missing_transmute_annotations)]
                 LdrpHandleTlsData: std::mem::transmute(
                     ntdll.offset(response.ldrp_handle_tls_data as isize),
                 ),
+                #[allow(clippy::missing_transmute_annotations)]
                 LdrpReleaseTlsEntry: std::mem::transmute(
                     ntdll.offset(response.ldrp_release_tls_entry as isize),
                 ),
@@ -158,6 +160,7 @@ impl NtContext {
                     &mut *(ntdll.offset(response.ldrp_module_datatable_lock as isize)
                         as *mut RTL_SRWLOCK),
                 ),
+                #[allow(clippy::missing_transmute_annotations)]
                 RtlInitializeHistoryTable: std::mem::transmute(
                     ntdll.offset(response.rtl_initialize_history_table as isize),
                 ),
@@ -517,6 +520,7 @@ impl<'a> PortableExecutable<'a> {
     fn get_exception_table(&mut self) -> &'a mut [IMAGE_RUNTIME_FUNCTION_ENTRY] {
         let mut size: u32 = 0;
         let table = unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
             std::mem::transmute(RtlImageDirectoryEntryToData(
                 self.file.contents_mut(),
                 1,

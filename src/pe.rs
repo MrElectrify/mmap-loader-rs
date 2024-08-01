@@ -799,7 +799,8 @@ impl<'a> PortableExecutable<'a> {
                     iat_directory.Size as usize,
                 )
                 .ok_or(Error::IDOutOfBounds)?;
-            self.resolve_import_descriptors(std::slice::from_raw_parts(
+            // ignore the alignment check here to better support packed/encrypted executables
+            self.resolve_import_descriptors(&*ptr::slice_from_raw_parts(
                 iat_entry,
                 (iat_directory.Size as usize) / std::mem::size_of::<IMAGE_IMPORT_DESCRIPTOR>(),
             ))

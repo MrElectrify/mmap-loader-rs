@@ -1,12 +1,7 @@
 use ntapi::ntrtl::{
     RtlRbInsertNodeEx, RtlReleaseSRWLockExclusive, RtlTryAcquireSRWLockExclusive, RTL_RB_TREE,
 };
-use std::{
-    ffi::c_void,
-    io::Result,
-    ops::{Deref, DerefMut},
-    ptr::null_mut,
-};
+use std::{ffi::c_void, io::Result, ops::{Deref, DerefMut}, ptr, ptr::null_mut};
 use winapi::{
     shared::{minwindef::DWORD, ntdef::PRTL_BALANCED_NODE},
     um::{
@@ -137,7 +132,7 @@ pub unsafe fn protected_write<T>(addr: *mut T, val: T) -> Result<()> {
         PAGE_READWRITE,
     )?;
     // write the value
-    *addr = val;
+    ptr::write_unaligned(addr, val);
     Ok(())
 }
 
@@ -207,7 +202,7 @@ impl<T> RtlMutex<T> {
     /// Locks the mutex and allows for access of the variable
     pub fn lock(&self) -> RtlMutexGuard<T> {
         unsafe {
-            RtlTryAcquireSRWLockExclusive(self.lock_ref as *mut RTL_SRWLOCK);
+            RtlTryAcquireSRWLockExclusive(self.lock_ref);
         }
         RtlMutexGuard { mutex: self }
     }
@@ -223,8 +218,8 @@ impl<T> RtlMutex<T> {
     }
 }
 
-unsafe impl<'a, T> Send for RtlMutex<T> {}
-unsafe impl<'a, T> Sync for RtlMutex<T> {}
+unsafe impl<T> Send for RtlMutex<T> {}
+unsafe impl<T> Sync for RtlMutex<T> {}
 
 impl<'a, T> Deref for RtlMutexGuard<'a, T> {
     type Target = T;
@@ -242,6 +237,6 @@ impl<'a, T> DerefMut for RtlMutexGuard<'a, T> {
 
 impl<'a, T> Drop for RtlMutexGuard<'a, T> {
     fn drop(&mut self) {
-        unsafe { RtlReleaseSRWLockExclusive(self.mutex.lock_ref as *mut RTL_SRWLOCK) }
+        unsafe { RtlReleaseSRWLockExclusive(self.mutex.lock_ref) }
     }
 }

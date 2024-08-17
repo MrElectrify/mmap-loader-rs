@@ -127,6 +127,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
     let ldrp_mapping_info_index = *get_offset!(map, "LdrpMappingInfoIndex");
     let ldrp_module_base_address_index = *get_offset!(map, "LdrpModuleBaseAddressIndex");
     let rtl_initialize_history_table = *get_offset!(map, "RtlInitializeHistoryTable");
+    let rtl_insert_inverted_function_table = *get_offset!(map, "RtlInsertInvertedFunctionTable");
     Ok(Some(Offsets {
         ldrp_hash_table,
         ldrp_module_datatable_lock,
@@ -135,6 +136,7 @@ fn get_offsets_from_pdb_bytes<'a, S: 'a + Source<'a>>(s: S) -> pdb::Result<Optio
         ldrp_mapping_info_index,
         ldrp_module_base_address_index,
         rtl_initialize_history_table,
+        rtl_insert_inverted_function_table
     }))
 }
 

@@ -11,6 +11,7 @@ pub struct Offsets {
     pub ldrp_mapping_info_index: u32,
     pub ldrp_module_base_address_index: u32,
     pub rtl_initialize_history_table: u32,
+    pub rtl_insert_inverted_function_table: u32
 }
 
 impl From<OffsetsResponse> for Offsets {
@@ -23,6 +24,7 @@ impl From<OffsetsResponse> for Offsets {
             ldrp_mapping_info_index: off.ldrp_mapping_info_index,
             ldrp_module_base_address_index: off.ldrp_module_base_address_index,
             rtl_initialize_history_table: off.rtl_initialize_history_table,
+            rtl_insert_inverted_function_table: off.rtl_insert_inverted_function_table
         }
     }
 }
@@ -37,6 +39,7 @@ impl From<&Offsets> for OffsetsResponse {
             ldrp_mapping_info_index: off.ldrp_mapping_info_index,
             ldrp_module_base_address_index: off.ldrp_module_base_address_index,
             rtl_initialize_history_table: off.rtl_initialize_history_table,
+            rtl_insert_inverted_function_table: off.rtl_insert_inverted_function_table
         }
     }
 }
@@ -51,6 +54,7 @@ impl From<Offsets> for OffsetsResponse {
             ldrp_mapping_info_index: off.ldrp_mapping_info_index,
             ldrp_module_base_address_index: off.ldrp_module_base_address_index,
             rtl_initialize_history_table: off.rtl_initialize_history_table,
+            rtl_insert_inverted_function_table: off.rtl_insert_inverted_function_table
         }
     }
 }

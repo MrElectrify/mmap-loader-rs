@@ -46,8 +46,8 @@ use winapi::{
     um::{
         libloaderapi::{GetModuleHandleW, GetProcAddress, LoadLibraryA},
         winnt::{
-            RtlAddFunctionTable, RtlDeleteFunctionTable, DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH,
-            IMAGE_DEBUG_DIRECTORY, IMAGE_DEBUG_TYPE_CODEVIEW, IMAGE_DIRECTORY_ENTRY_DEBUG,
+            RtlDeleteFunctionTable, DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH, IMAGE_DEBUG_DIRECTORY,
+            IMAGE_DEBUG_TYPE_CODEVIEW, IMAGE_DIRECTORY_ENTRY_DEBUG,
             IMAGE_DIRECTORY_ENTRY_EXCEPTION, IMAGE_DIRECTORY_ENTRY_IMPORT,
             IMAGE_DIRECTORY_ENTRY_TLS, IMAGE_DOS_HEADER, IMAGE_FILE_MACHINE_AMD64,
             IMAGE_IMPORT_BY_NAME, IMAGE_IMPORT_DESCRIPTOR, IMAGE_NT_HEADERS64,
@@ -70,6 +70,7 @@ pub struct NtContext {
     LdrpMappingInfoIndex: RtlMutex<RTL_RB_TREE>,
     LdrpModuleBaseAddressIndex: RtlMutex<RTL_RB_TREE>,
     RtlInitializeHistoryTable: unsafe extern "stdcall" fn(),
+    RtlInsertInvertedFunctionTable: unsafe extern "fastcall" fn(HMODULE, usize) -> i32,
 }
 
 unsafe impl Send for NtContext {}
@@ -163,6 +164,10 @@ impl NtContext {
                 #[allow(clippy::missing_transmute_annotations)]
                 RtlInitializeHistoryTable: std::mem::transmute(
                     ntdll.offset(response.rtl_initialize_history_table as isize),
+                ),
+                #[allow(clippy::missing_transmute_annotations)]
+                RtlInsertInvertedFunctionTable: std::mem::transmute(
+                    ntdll.offset(response.rtl_insert_inverted_function_table as isize),
                 ),
             }
         }
@@ -427,16 +432,27 @@ impl<'a> PortableExecutable<'a> {
         if exception_table.is_empty() {
             return Ok(());
         }
-        // add the table to the process
-        if unsafe {
-            RtlAddFunctionTable(
-                exception_table.as_mut_ptr(),
-                exception_table.len() as u32,
-                self.file.contents() as u64,
-            ) == false as u8
-        } {
+        // register the exception table
+        let res = unsafe {
+            (self.context.RtlInsertInvertedFunctionTable)(
+                self.module_handle(),
+                self.nt_headers.OptionalHeader.SizeOfImage as usize,
+            )
+        };
+        if res == 0 {
             return Err(Error::ExceptionTableEntry);
         }
+        // this doesn't seem to work on x86-64 anymore...
+        // // add the table to the process
+        // if unsafe {
+        //     RtlAddFunctionTable(
+        //         exception_table.as_mut_ptr(),
+        //         exception_table.len() as u32,
+        //         self.file.contents() as u64,
+        //     ) == false as u8
+        // } {
+        //     return Err(Error::ExceptionTableEntry);
+        // }
         unsafe { (self.context.RtlInitializeHistoryTable)() }
         Ok(())
     }
@@ -529,7 +545,7 @@ impl<'a> PortableExecutable<'a> {
             ))
         };
         unsafe {
-            std::slice::from_raw_parts_mut(
+            &mut *ptr::slice_from_raw_parts_mut(
                 table,
                 size as usize / std::mem::size_of::<IMAGE_RUNTIME_FUNCTION_ENTRY>(),
             )
